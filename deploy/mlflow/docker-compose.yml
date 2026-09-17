@@ -1,0 +1,46 @@
+# A tracking server for experiments that should outlive a laptop: runs in
+# postgres, artifacts on a volume, the UI on http://localhost:8081.
+#
+#   docker compose -f deploy/mlflow/docker-compose.yml up -d --build
+#   export HYPERACTIVE_MLFLOW_TRACKING_URI=http://localhost:8081
+#
+# Without this server the experiments log to the local file store (./mlruns),
+# which needs nothing running and is browsable with `mlflow ui`.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hyperactive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hyperactive}
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hyperactive}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - mlflow-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MLFLOW_BACKEND_STORE_URI: ${MLFLOW_BACKEND_STORE_URI:-postgresql://${POSTGRES_USER:-hyperactive}:${POSTGRES_PASSWORD:-hyperactive}@postgres:5432/mlflow}
+      MLFLOW_ARTIFACTS_DESTINATION: /mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # 8081 outside: on macOS port 5000 is taken by the AirPlay receiver.
+      - "${MLFLOW_PORT:-8081}:5000"
+    volumes:
+      - mlflow-store:/mlflow/store
+      - mlflow-artifacts:/mlflow/artifacts
+    restart: unless-stopped
+
+volumes:
+  mlflow-postgres:
+  mlflow-store:
+  mlflow-artifacts:

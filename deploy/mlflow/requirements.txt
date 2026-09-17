@@ -1,0 +1,4 @@
+# The tracking server. Pinned: the run store schema is tied to the server
+# version, and an upgrade migrates the database.
+mlflow==2.17.2
+psycopg2-binary>=2.9.9

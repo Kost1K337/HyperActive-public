@@ -1,0 +1,51 @@
+{
+  "name": "arrive39",
+  "feature_set": "gen39",
+  "action_window": 8,
+  "files": {
+    "model": {
+      "path": "model.zip",
+      "sha256": "9b4a0423688a06ac37ac465258e2d25361169398ed3a1017376c1b08c3ebb7ad"
+    },
+    "vec_normalize": {
+      "path": "vec_normalize.pkl",
+      "sha256": "d4004e01ec49fde5ceb83d5ec5c72e3deb9334da57f28a29910aabe1abf5292a"
+    }
+  },
+  "algorithm": {
+    "name": "MaskedCDQN",
+    "use_cdqn": true,
+    "behavioral_cloning": false,
+    "greedy_prefill": false,
+    "net_width": 64,
+    "optimizer": "AdamW",
+    "weight_decay": 0.0001,
+    "learning_rate": 0.0001,
+    "gamma": 0.99,
+    "batch_size": 64,
+    "buffer_size": 100000,
+    "learning_starts": 160,
+    "target_update_interval": 160,
+    "exploration": {
+      "initial_eps": 1.0,
+      "final_eps": 0.05,
+      "fraction": 0.8
+    },
+    "max_grad_norm": 10.0,
+    "total_timesteps": 160000
+  },
+  "training_distribution": {
+    "well_count": 16,
+    "sampling": "clusters",
+    "crew_mix": "2x1,2x5,3x2,3x4,4x1,4x3,5x2,5x5",
+    "horizon_years_mix": "5,8,10,15,20,25",
+    "drilling_months_mix": "12,18,24,36,48,60",
+    "oil_constraint_prob": 0.5,
+    "oil_constraint_share": "0.08:0.35",
+    "production_profile": "arps",
+    "holdout_fraction": 0.2,
+    "seed": 1
+  },
+  "training_data": "non-public well pool; not included in this repository",
+  "command": "python experiments/train.py --run-name arrive39 --seed 1 --well-count 16 --action-window 8 --rl-episodes 10000 --sampling clusters --net-width 64 --weight-decay 0.0001 --behavioral-cloning 0 --greedy-prefill 0 --hot-start-subsets 30 --greedy-every 50 --crew-mix 2x1,2x5,3x2,3x4,4x1,4x3,5x2,5x5 --horizon-mix 5,8,10,15,20,25 --drilling-months-mix 12,18,24,36,48,60 --oil-constraint-prob 0.5 --oil-constraint-share 0.08:0.35"
+}
