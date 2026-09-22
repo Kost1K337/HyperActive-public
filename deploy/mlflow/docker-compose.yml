@@ -40,6 +40,21 @@ services:
       - mlflow-artifacts:/mlflow/artifacts
     restart: unless-stopped
 
+  # Loads the recorded benchmark grid of the released model into the server the
+  # first time it comes up, so nobody has to compute a grid before the UI shows
+  # anything. Runs once and exits; a grid already seeded is left alone.
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    command: ["python", "/mlflow/seed_runs.py"]
+    restart: "no"
+
 volumes:
   mlflow-postgres:
   mlflow-store:

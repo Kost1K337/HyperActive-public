@@ -1,0 +1,6 @@
+# Only the bundled synthetic pool ships here. Real field tables must never
+# reach a public repository, and they arrive as spreadsheets far more often
+# than as CSV - see docs/data-format.md for the schema they would follow.
+*.xlsx
+*.xls
+*.xlsm

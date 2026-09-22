@@ -1,6 +1,6 @@
 """Smoke tests for loading and running the released policy.
 
-Uses the actual ``models/arrive39`` artifact shipped in the repository, on
+Uses the actual ``models/bc39`` artifact shipped in the repository, on
 the bundled synthetic well pool - these are integration tests (they load real
 weights and run a real rollout), not unit tests, and are the closest thing to
 "does the release actually work" in this suite.
@@ -19,10 +19,10 @@ from hyperactive.data import load_coordinates, load_wells
 from hyperactive.env import PlanEnv
 from hyperactive.inference import ModelManifestError, load_policy, plan_with_policy, run_episode
 from hyperactive.planning import ClusterRandomRiskStrategy, DistanceTeamMovement
-from hyperactive.scenario import default_npv, default_profile, horizon_end, make_team_pool
+from hyperactive.scenario import make_npv, default_profile, horizon_end, make_team_pool
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_DIR = ROOT / "models" / "arrive39"
+MODEL_DIR = ROOT / "models" / "bc39"
 
 
 @pytest.fixture(scope="module")
@@ -43,7 +43,7 @@ def build_env(wells, movement, bundle, start=None):
     start = start or datetime(2026, 1, 1)
     return PlanEnv(
         wells=list(wells), team_pool=make_team_pool(2, 2), movement=movement,
-        cost_function=default_npv(start), n_actions=bundle.n_actions,
+        cost_function=make_npv(start), n_actions=bundle.n_actions,
         start=start, end=horizon_end(start, 10),
         production_profile=default_profile(),
         risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
@@ -56,7 +56,7 @@ class TestLoadPolicy:
         assert bundle.n_actions == bundle.manifest["action_window"] == 8
 
     def test_tampered_model_file_is_rejected(self, tmp_path):
-        tampered = tmp_path / "arrive39"
+        tampered = tmp_path / "bc39"
         shutil.copytree(MODEL_DIR, tampered)
         with open(tampered / "model.zip", "ab") as handle:
             handle.write(b"corruption")
@@ -64,7 +64,7 @@ class TestLoadPolicy:
             load_policy(tampered, device="cpu")
 
     def test_tampered_manifest_sha_is_rejected(self, tmp_path):
-        tampered = tmp_path / "arrive39"
+        tampered = tmp_path / "bc39"
         shutil.copytree(MODEL_DIR, tampered)
         manifest = json.loads((tampered / "manifest.json").read_text())
         manifest["files"]["vec_normalize"]["sha256"] = "0" * 64
@@ -73,7 +73,7 @@ class TestLoadPolicy:
             load_policy(tampered, device="cpu")
 
     def test_mismatched_feature_set_is_rejected(self, tmp_path):
-        tampered = tmp_path / "arrive39"
+        tampered = tmp_path / "bc39"
         shutil.copytree(MODEL_DIR, tampered)
         manifest = json.loads((tampered / "manifest.json").read_text())
         manifest["feature_set"] = "not_a_real_feature_set"
@@ -141,7 +141,7 @@ class TestPlanWithPolicy:
         start = datetime(2026, 1, 1)
         wrong_window_env = PlanEnv(
             wells=list(wells), team_pool=make_team_pool(2, 2), movement=movement,
-            cost_function=default_npv(start), n_actions=bundle.n_actions + 1,
+            cost_function=make_npv(start), n_actions=bundle.n_actions + 1,
             start=start, end=horizon_end(start, 10), production_profile=default_profile(),
             risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
         )

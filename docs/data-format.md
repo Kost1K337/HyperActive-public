@@ -43,13 +43,17 @@ input table.
 
 ### Readiness
 
-`load_wells(path, readiness_hour=8)` turns `init_entry_date` into
-`readiness_date` — the earliest moment a well may be scheduled
-(`SimpleInfrastructure.get_ready_date`) — at `readiness_hour:00` of that
-calendar day. Pass `readiness_hour=None` to use the exact timestamp from the
-table instead (this is what `benchmark/run_benchmark.py` does, matching how the
-reference benchmark cells were produced). A well without `init_entry_date`
-has no readiness constraint and is available from the start of planning.
+`load_wells(path)` turns `init_entry_date` into `readiness_date` — the
+earliest moment a well may be scheduled (`SimpleInfrastructure.get_ready_date`)
+— keeping the timestamp from the table, so a plain date means 00:00 of that
+day. This is the project-wide convention, shared by `hyperactive-plan`,
+training and the benchmark; `load_wells(path, readiness_hour=h)` moves every
+readiness to `h:00` of its day instead. A well without `init_entry_date` has
+no readiness constraint and is available from the start of planning.
+
+Unless a start date is given explicitly, planning starts at midnight of the
+earliest readiness in the pool (`hyperactive.scenario.planning_start`), so the
+work window opens with the first ready well rather than with idle months.
 
 ## Cluster coordinates table
 

@@ -1,0 +1,5 @@
+# Local overrides of the tracking stack: credentials and per-machine ports are
+# passed through the environment, never committed.
+.env
+*.env
+docker-compose.override.yml

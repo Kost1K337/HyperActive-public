@@ -43,6 +43,38 @@ The run store is postgres rather than sqlite deliberately: sqlite holds one
 writing transaction per file, and parallel benchmark cells run into
 `database is locked`. The tracking database is created on startup if absent.
 
+### The pre-loaded benchmark
+
+A fresh server does not come up empty. Once it is healthy, a one-shot `seed`
+service replays the released model's full benchmark grid — the suite run and
+all 120 cells of `bc39` over `benchmark/case_10` — from
+[`deploy/mlflow/seed/`](../deploy/mlflow/seed), so the first thing the UI shows
+is how the released policy actually does, without anyone waiting hours for a
+grid.
+
+These are the recorded runs themselves, not a summary table: the same
+parameters, metrics, tags, input digests and suite/cell nesting the benchmark
+wrote. Because they carry the same provenance as any other run
+(`run.command`, `env.*`, `dataset.*.sha256`, `model.*.sha256`), a seeded cell
+can be verified and recomputed with `rerun.py` exactly like a run of your own:
+
+```bash
+export HYPERACTIVE_MLFLOW_TRACKING_URI=http://localhost:8081
+python experiments/rerun.py --last --experiment hyperactive-benchmarks
+```
+
+That checks all eight fund tables and the model by content hash, and the
+runtime against the recorded one. The grid was computed from a clean checkout
+(`env.git_dirty` is `false`) immediately before the seed file itself was
+written back into the repository, so the recorded commit is the one that
+introduced the model rather than the commit you have checked out: expect
+`rerun.py` to report that one difference and nothing else.
+
+Seeding is idempotent — each run carries a `seed.id`, and a grid already
+present is skipped — so restarting the stack never duplicates it. To start
+without it, `docker compose ... up -d postgres mlflow` brings up the server
+alone.
+
 ## Configuration
 
 | Flag | Environment variable | Default |

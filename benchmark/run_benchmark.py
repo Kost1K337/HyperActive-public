@@ -15,20 +15,18 @@ must contain exactly one coordinates workbook. The planning start of a fund is
 the earliest readiness date of its wells, so that every fund starts its work
 window with the first ready well rather than with idle time.
 
-Conventions of the benchmark (they differ from the training defaults):
+Economics, readiness and calendar conventions are the project's own
+(:mod:`hyperactive.scenario`), shared with ``hyperactive-plan`` and training,
+and can be overridden with ``--settings``. On top of them the benchmark fixes:
 
-* readiness of a well is its ``init_entry_date`` at 00:00;
 * coordinates are read with the positional contract ``cluster, x, y, z``
-  (first four columns after the index rule of ``pandas.read_excel(names=...)``).
-  Workbooks that do not follow the contract produce cluster ids that match no
-  well, and every move between clusters then takes ``min_days_between_clusters``;
+  (first four columns after the index rule of ``pandas.read_excel(names=...)``);
 * the economic horizon is ``--planning-months`` (default 240 months), the work
-  window is the cell's drilling horizon;
-* economics: ``BENCHMARK_ECONOMICS`` below, overridable with ``--settings``.
+  window is the cell's drilling horizon.
 
 Example::
 
-    python benchmark/run_benchmark.py --model models/arrive39 --cases benchmark/case_10 \\
+    python benchmark/run_benchmark.py --model models/bc39 --cases benchmark/case_10 \\
         --funds 48 --horizons 12,24 --crews 2x1,3x2 --out runs/benchmark-48.xlsx
 """
 
@@ -56,35 +54,17 @@ from hyperactive.env import PlanEnv  # noqa: E402
 from hyperactive.greedy import PlanBuilder  # noqa: E402
 from hyperactive.inference import PolicyBundle, load_policy, plan_with_policy  # noqa: E402
 from hyperactive.planning import (  # noqa: E402
-    NPV,
     ArpsDeclineProductionProfile,
-    BaseCapex,
-    BaseOpex,
     ClusterRandomRiskStrategy,
     DistanceTeamMovement,
     TeamManager,
 )
-from hyperactive.scenario import make_team_pool, work_window_end  # noqa: E402
+from hyperactive.scenario import load_settings, make_npv, make_team_pool, work_window_end  # noqa: E402
 from hyperactive.tracking import RunTracker, plan_metrics  # noqa: E402
 
 DEFAULT_HORIZONS = "12,18,24,36,48,60"
 DEFAULT_CREWS = "2x1,2x2,3x2,3x3,4x3"
-DAYS_PER_MONTH = 365.25 / 12.0
 MAX_EPISODES = 100
-
-BENCHMARK_ECONOMICS: dict[str, Any] = {
-    "equipment_cost": 2500000.0,
-    "oil_cost_per_tone": 109.9,
-    "water_cost_per_tone": 420.0,
-    "repair_per_year": 3093900.0,
-    "maintain_per_year": 2336200.0,
-    "oil_price_per_tone": 13896.0,
-    "discount_rate": 0.125,
-    "build_cost_per_meter": {
-        "ГС+ГРП": 25300.0, "ННС+ГРП": 12900.0, "МЗС": 27300.0,
-        "МЗС+ГРП": 28300.0, "ГС": 23300.0, "ННС": 10900.0,
-    },
-}
 
 COORD_HINTS = ("coord",)
 DATE_COLUMNS = ("init_entry_date", "readiness_date")
@@ -108,6 +88,8 @@ class Config:
     episodes: int
     exploration: float
     economics: dict[str, Any]
+    readiness_hour: Optional[int]
+    days_per_year: float
 
 
 # ---------------------------------------------------------------------------
@@ -180,24 +162,6 @@ def contract_coordinates(path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def make_npv(start: datetime, economics: dict[str, Any]) -> NPV:
-    return NPV(
-        oil_price_per_tone=economics["oil_price_per_tone"],
-        project_start_date=start,
-        capex_cost=BaseCapex(
-            build_cost_per_metr=dict(economics["build_cost_per_meter"]),
-            equipment_cost=economics["equipment_cost"],
-        ),
-        opex_cost=BaseOpex(
-            oil_cost_per_tone=economics["oil_cost_per_tone"],
-            water_cost_per_tone=economics["water_cost_per_tone"],
-            repair_per_year=economics["repair_per_year"],
-            maintain_per_year=economics["maintain_per_year"],
-        ),
-        discount_rate=economics["discount_rate"],
-    )
-
-
 _WORKER: dict[str, Any] = {}
 
 
@@ -209,10 +173,11 @@ def _bundle(model_dir: str) -> PolicyBundle:
 
 
 def run_cell(fund: Fund, drilling: int, gtm: int, months: int, cfg: Config) -> dict[str, Any]:
-    wells, rejected = load_wells(fund.wells, readiness_hour=None)
+    wells, rejected = load_wells(fund.wells, readiness_hour=cfg.readiness_hour)
     movement = DistanceTeamMovement.from_dicts(contract_coordinates(fund.coords))
     start = fund.start
-    plan_end = start + timedelta(days=int(round(cfg.planning_months * DAYS_PER_MONTH)))
+    days_per_month = cfg.days_per_year / 12.0
+    plan_end = start + timedelta(days=int(round(cfg.planning_months * days_per_month)))
     jobs_end = work_window_end(start, plan_end, months)
 
     row: dict[str, Any] = {
@@ -328,7 +293,7 @@ def _crew_list(raw: str) -> list[tuple[int, int]]:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--model", default=str(ROOT / "models" / "arrive39"))
+    p.add_argument("--model", default=str(ROOT / "models" / "bc39"))
     p.add_argument("--cases", type=Path, default=ROOT / "benchmark" / "case_10")
     p.add_argument("--funds", default="", help="only these funds, comma-separated")
     p.add_argument("--horizons", default=DEFAULT_HORIZONS, help="work windows, months")
@@ -337,7 +302,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--episodes", type=int, default=10, help=f"RL rollouts per cell, 1..{MAX_EPISODES}")
     p.add_argument("--exploration", type=float, default=0.15, help="probability of a random valid action")
     p.add_argument("--start-date", default=None, help="one start date for all funds, YYYY-MM-DD")
-    p.add_argument("--settings", type=Path, default=None, help="JSON with economics overrides")
+    p.add_argument("--settings", type=Path, default=None,
+                   help="JSON overriding the project settings: economics, readiness_hour, "
+                        "days_per_year (see hyperactive.scenario.load_settings)")
     p.add_argument("--workers", type=int, default=1, help="cells computed in parallel processes")
     p.add_argument("--out", type=Path, default=None, help=".xlsx or .csv; default runs/benchmark-<model>.xlsx")
     p.add_argument("--dry-run", action="store_true")
@@ -359,12 +326,12 @@ def main() -> int:
         raise SystemExit(f"--episodes: 1..{MAX_EPISODES}")
     if not 0.0 <= args.exploration <= 1.0:
         raise SystemExit("--exploration: 0..1")
-    economics = copy.deepcopy(BENCHMARK_ECONOMICS)
-    if args.settings:
-        economics.update(json.loads(args.settings.read_text(encoding="utf-8")))
+    settings = load_settings(args.settings)
+    economics = settings.economics
     start_date = datetime.strptime(args.start_date, "%Y-%m-%d") if args.start_date else None
     cfg = Config(model_dir=str(args.model), planning_months=args.planning_months,
-                 episodes=args.episodes, exploration=args.exploration, economics=economics)
+                 episodes=args.episodes, exploration=args.exploration, economics=economics,
+                 readiness_hour=settings.readiness_hour, days_per_year=settings.days_per_year)
 
     found, problems = discover_funds(args.cases.resolve(), start_date)
     wanted = {name.strip() for name in args.funds.split(",") if name.strip()}
@@ -398,6 +365,8 @@ def main() -> int:
         ("rl episodes", args.episodes), ("exploration", args.exploration),
         ("profile", "arps"), ("baseline", "greedy, one deterministic pass"),
         ("economics", json.dumps(economics, ensure_ascii=False)),
+        ("readiness hour", "table timestamp" if cfg.readiness_hour is None else cfg.readiness_hour),
+        ("days per year", cfg.days_per_year),
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     suite = args.suite or args.cases.resolve().name
@@ -424,7 +393,8 @@ def _run_grid(args, cfg, grid, rows, out, parameters, tracker, suite, model_name
     tracker.log_params({"model": model_name, "suite": suite, "cases": str(args.cases),
                         "planning_months": args.planning_months, "episodes": args.episodes,
                         "exploration": args.exploration, "cells": len(grid),
-                        "economics": cfg.economics})
+                        "economics": cfg.economics, "readiness_hour": cfg.readiness_hour,
+                        "days_per_year": cfg.days_per_year})
     tracker.log_dict(cfg.economics, "economics.json")
     tracker.log_model_artifacts(args.model)
     for fund in sorted({item[0] for item in grid}, key=lambda f: f.name):

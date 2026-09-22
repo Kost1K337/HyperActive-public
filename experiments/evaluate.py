@@ -13,7 +13,7 @@ production and economic model:
 
 Example::
 
-    python experiments/evaluate.py --model models/arrive39 --subsets 5 --well-count 6 \\
+    python experiments/evaluate.py --model models/bc39 --subsets 5 --well-count 6 \\
         --drilling-crews 2 --gtm-crews 1 --horizon-years 10 --drilling-months 24
 """
 
@@ -40,11 +40,12 @@ from hyperactive.greedy import PlanBuilder  # noqa: E402
 from hyperactive.inference import load_policy, plan_with_policy  # noqa: E402
 from hyperactive.planning import ClusterRandomRiskStrategy, DistanceTeamMovement, TeamManager  # noqa: E402
 from hyperactive.scenario import (  # noqa: E402
-    default_npv,
     default_profile,
     horizon_end,
+    make_npv,
     make_team_pool,
     oil_constraints,
+    planning_start,
     work_window_end,
 )
 from hyperactive.tracking import RunTracker  # noqa: E402
@@ -54,11 +55,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Greedy vs RL vs exhaustive search on small well subsets.")
     p.add_argument("--wells", default=str(ROOT / "data" / "synthetic" / "wells.csv"))
     p.add_argument("--coordinates", default=str(ROOT / "data" / "synthetic" / "clusters.csv"))
-    p.add_argument("--model", default=str(ROOT / "models" / "arrive39"))
+    p.add_argument("--model", default=str(ROOT / "models" / "bc39"))
     p.add_argument("--subsets", type=int, default=10)
     p.add_argument("--well-count", type=int, default=6)
     p.add_argument("--sampling", choices=("wells", "clusters"), default="clusters")
-    p.add_argument("--start", default="2025-01-01")
+    p.add_argument("--start", default=None,
+                   help="YYYY-MM-DD (default: the earliest well readiness, as in the benchmark)")
     p.add_argument("--horizon-years", type=int, default=10)
     p.add_argument("--drilling-months", type=int, default=None)
     p.add_argument("--drilling-crews", type=int, default=2)
@@ -79,10 +81,11 @@ def parse_args() -> argparse.Namespace:
 
 
 class Scenario:
-    def __init__(self, args: argparse.Namespace, movement: DistanceTeamMovement) -> None:
+    def __init__(self, args: argparse.Namespace, movement: DistanceTeamMovement,
+                 start: datetime) -> None:
         self.args = args
         self.movement = movement
-        self.start = datetime.fromisoformat(args.start)
+        self.start = start
         self.end = horizon_end(self.start, args.horizon_years)
         self.end_jobs = work_window_end(self.start, self.end, args.drilling_months)
 
@@ -94,7 +97,7 @@ class Scenario:
     def builder(self, wells: list[Any]) -> PlanBuilder:
         return PlanBuilder(
             start=self.start, end=self.end, end_jobs=self.end_jobs,
-            cost_function=default_npv(self.start), production_profile=default_profile(),
+            cost_function=make_npv(self.start), production_profile=default_profile(),
             constraints=oil_constraints(self.oil_bound(wells)),
         )
 
@@ -125,7 +128,7 @@ class Scenario:
         env = PlanEnv(
             wells=deepcopy(wells),
             team_pool=make_team_pool(self.args.drilling_crews, self.args.gtm_crews),
-            movement=self.movement, cost_function=default_npv(self.start),
+            movement=self.movement, cost_function=make_npv(self.start),
             n_actions=bundle.n_actions, start=self.start, end=self.end, end_jobs=self.end_jobs,
             production_profile=default_profile(),
             risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
@@ -161,13 +164,16 @@ def main() -> int:
 
 def _evaluate(args: argparse.Namespace, tracker: RunTracker) -> int:
     wells, _ = load_wells(args.wells)
-    scenario = Scenario(args, DistanceTeamMovement.from_dicts(load_coordinates(args.coordinates, wells)))
+    start = datetime.fromisoformat(args.start) if args.start else planning_start(wells)
+    scenario = Scenario(args, DistanceTeamMovement.from_dicts(load_coordinates(args.coordinates, wells)),
+                        start)
     bundle = load_policy(args.model)
     rng = np.random.default_rng(args.seed)
 
     tracker.log_environment()
     tracker.log_params({key: value for key, value in vars(args).items()
                         if key not in {"tracking_uri", "experiment", "no_tracking"}})
+    tracker.log_params({"planning_start": start.date().isoformat()})
     tracker.log_seeds(subsets=args.seed)
     tracker.log_dataset(args.wells, "wells")
     tracker.log_dataset(args.coordinates, "coordinates")

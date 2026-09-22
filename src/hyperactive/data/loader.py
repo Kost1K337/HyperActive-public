@@ -44,8 +44,9 @@ _LOOKUP = {
     for synonym in synonyms
 }
 
-# Hour of the day at which a well becomes ready on its readiness date.
-READINESS_HOUR = 8
+# Hour of the day at which a well becomes ready on its readiness date; None
+# keeps the timestamp from the table (00:00 for a plain date).
+READINESS_HOUR: Optional[int] = None
 
 
 def normalize_header(value) -> str:
@@ -130,7 +131,7 @@ def is_valid_well(well: Well) -> bool:
     return True
 
 
-def readiness_from_date(value: Any, hour: int = READINESS_HOUR) -> Optional[datetime]:
+def readiness_from_date(value: Any, hour: int) -> Optional[datetime]:
     if value is None or pd.isna(value):
         return None
     parsed = pd.to_datetime(value, errors="coerce")

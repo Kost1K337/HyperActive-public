@@ -77,19 +77,31 @@ def _find_run(client, args: argparse.Namespace):
     if experiment is None:
         raise SystemExit(f"no experiment {args.experiment!r} at this tracking URI")
     runs = client.search_runs([experiment.experiment_id],
-                              order_by=["attributes.start_time DESC"], max_results=1)
+                              order_by=["attributes.start_time DESC"], max_results=200)
     if not runs:
         raise SystemExit(f"experiment {args.experiment!r} has no runs")
-    return runs[0]
+    # A benchmark suite starts before its cells, so the most recent run is
+    # normally a cell - and a cell is not a reproducible unit: the command,
+    # the seeds and the inputs are recorded on the suite that owns it.
+    top_level = next((run for run in runs if not run.data.tags.get("mlflow.parentRunId")), None)
+    if top_level is None:
+        raise SystemExit(f"experiment {args.experiment!r} has only nested runs; "
+                         "pass --run-id of the run to reproduce")
+    return top_level
 
 
 def _datasets(params: dict[str, str]) -> dict[str, dict[str, str]]:
-    """Recorded inputs: ``dataset.<name>.{filename,sha256,bytes}`` parameters."""
+    """Recorded inputs: ``dataset.<name>.{filename,sha256,bytes}`` parameters.
+
+    The name itself may contain dots - the benchmark logs one input per fund as
+    ``dataset.fund.<fund>.wells.sha256`` - so the field is taken from the right
+    and everything before it is the name.
+    """
     out: dict[str, dict[str, str]] = {}
     for key, value in params.items():
-        if not key.startswith("dataset."):
+        if not key.startswith("dataset.") or "." not in key[len("dataset."):]:
             continue
-        _, name, field = key.split(".", 2)
+        name, field = key[len("dataset."):].rsplit(".", 1)
         out.setdefault(name, {})[field] = value
     return out
 
@@ -174,9 +186,17 @@ def main() -> int:
     print(f"command : python {command_line or 'not recorded'}")
     print("checks:")
 
-    problems = check_inputs(_datasets(params), command)
+    datasets = _datasets(params)
+    problems = check_inputs(datasets, command)
     problems += check_environment(params)
     problems += check_code(params, tags)
+
+    # Nothing recorded is not the same as nothing wrong: a run without inputs,
+    # environment or command cannot be verified at all, and saying it matches
+    # would be the most misleading answer available.
+    if not datasets and not command and not params.get("env.python"):
+        problems.append("the run records no command, inputs or environment, "
+                        "so there is nothing to verify against")
 
     if problems:
         print("\nmismatches that can change the result:")

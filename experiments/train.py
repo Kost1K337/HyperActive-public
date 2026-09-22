@@ -21,14 +21,14 @@ Pipeline:
 6. save ``models/{model.zip, vec_normalize.pkl, manifest.json}``, loadable by
    :func:`hyperactive.inference.load_policy`.
 
-The released ``arrive39`` model was trained with the command stored in
-``models/arrive39/manifest.json`` (on a non-public pool). On the bundled synthetic
+The released ``bc39`` model was trained with the command stored in
+``models/bc39/manifest.json`` (on a non-public pool). On the bundled synthetic
 data::
 
     python experiments/train.py --run-name demo --rl-episodes 300 \\
         --crew-mix 2x1,3x2,5x5 --horizon-mix 5,10,25 --drilling-months-mix 12,24,60 \\
         --oil-constraint-prob 0.5 --net-width 64 --weight-decay 0.0001 \\
-        --behavioral-cloning 0 --greedy-prefill 0
+        --behavioral-cloning 1 --greedy-prefill 0
 """
 
 from __future__ import annotations
@@ -65,12 +65,13 @@ from hyperactive.planning import (  # noqa: E402
     TeamManager,
 )
 from hyperactive.scenario import (  # noqa: E402
-    PROJECT_START,
-    default_npv,
     default_profile,
     horizon_end,
+    load_settings,
+    make_npv,
     make_team_pool,
     oil_constraints,
+    planning_start,
     work_window_end,
 )
 from hyperactive.tracking import RunTracker  # noqa: E402
@@ -92,6 +93,9 @@ def parse_args() -> argparse.Namespace:
     data.add_argument("--wells-file", default=str(ROOT / "data" / "synthetic" / "wells.csv"))
     data.add_argument("--coordinates-file", default=str(ROOT / "data" / "synthetic" / "clusters.csv"))
     data.add_argument("--output-dir", default=None, help="default: runs/<run-name>")
+    data.add_argument("--settings", default=None,
+                      help="JSON overriding the project settings: economics, readiness_hour, "
+                           "days_per_year (see hyperactive.scenario.load_settings)")
 
     run = p.add_argument_group("run")
     run.add_argument("--run-name", required=True)
@@ -149,6 +153,8 @@ def parse_args() -> argparse.Namespace:
     # Cloning pulls the policy towards the greedy one; it can be disabled to
     # check whether it sets the ceiling.
     warm.add_argument("--behavioral-cloning", type=int, choices=(0, 1), default=1)
+    warm.add_argument("--bc-patience", type=int, default=8,
+                      help="cloning stops after this many epochs without validation improvement")
     warm.add_argument("--greedy-prefill", type=int, choices=(0, 1), default=1)
 
     track = p.add_argument_group("tracking")
@@ -231,14 +237,14 @@ def order_from_plan(plan: Any) -> list[str]:
     return [str(context.well.name) for context in plan.well_plans] if plan is not None else []
 
 
-def behavioral_cloning_config(enabled: bool) -> BehavioralCloningConfig:
+def behavioral_cloning_config(enabled: bool, patience: int = 8) -> BehavioralCloningConfig:
     return BehavioralCloningConfig(
         enabled=enabled,
         demo_episodes=10,
         demo_noise_prob=0.15,
         max_steps_multiplier=2,
         epochs=40,
-        early_stopping_patience=8,
+        early_stopping_patience=patience,
         post_bc_exploration_initial_eps=0.3,
     )
 
@@ -248,20 +254,27 @@ class Trainer:
 
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self.project_start = PROJECT_START
+        self.settings = load_settings(args.settings)
         self.horizon_years = args.horizon_years or DEFAULT_HORIZON_YEARS
-        wells, rejected = load_wells(args.wells_file)
+        wells, rejected = load_wells(args.wells_file, readiness_hour=self.settings.readiness_hour)
+        self.project_start = planning_start(wells)
         self.all_wells = wells
         self.rejected = rejected
         self.movement = DistanceTeamMovement.from_dicts(load_coordinates(args.coordinates_file, wells))
         self._greedy_cache: dict[tuple, float] = {}
 
+    def npv(self):
+        return make_npv(self.project_start, self.settings.economics)
+
+    def horizon_end(self, horizon_years: float):
+        return horizon_end(self.project_start, horizon_years, self.settings.days_per_year)
+
     def default_greedy_plan(self, wells: list[Any]):
         """Greedy plan in the default configuration (2x2 crews, no work window, no cap)."""
         builder = PlanBuilder(
             start=self.project_start,
-            end=horizon_end(self.project_start, self.horizon_years),
-            cost_function=default_npv(self.project_start),
+            end=self.horizon_end(self.horizon_years),
+            cost_function=self.npv(),
             production_profile=default_profile(),
         )
         return builder.compile(
@@ -285,11 +298,11 @@ class Trainer:
                 cached = float(self.default_greedy_plan(deepcopy(wells)).total_profit())
             else:
                 drilling, gtm, horizon_years = config
-                end = horizon_end(self.project_start, horizon_years)
+                end = self.horizon_end(horizon_years)
                 builder = PlanBuilder(
                     start=self.project_start, end=end,
                     end_jobs=work_window_end(self.project_start, end, drilling_months),
-                    cost_function=default_npv(self.project_start),
+                    cost_function=self.npv(),
                     production_profile=default_profile(),
                     constraints=oil_constraints(oil_bound),
                 )
@@ -370,7 +383,7 @@ class RandomSubsetPlanEnv(PlanEnv):
             if self._horizon_mix else trainer.horizon_years
         )
         self.team_pool = make_team_pool(drilling, gtm)
-        self.end = horizon_end(trainer.project_start, horizon_years)
+        self.end = trainer.horizon_end(horizon_years)
         self._episode_drilling_months = (
             self._drilling_mix[int(self._rng.integers(len(self._drilling_mix)))]
             if self._drilling_mix else None
@@ -607,6 +620,10 @@ def _train(args: argparse.Namespace, output_dir: Path, tracker: RunTracker) -> i
                       split=args.seed if args.split_seed is None else args.split_seed)
     tracker.log_dataset(args.wells_file, "wells")
     tracker.log_dataset(args.coordinates_file, "coordinates")
+    if args.settings:
+        tracker.log_dataset(args.settings, "settings", attach=True)
+    tracker.log_params({"settings": trainer.settings.to_dict()})
+    tracker.log_dict(trainer.settings.to_dict(), "settings.json")
     tracker.log_params({"pool.valid_wells": len(trainer.all_wells),
                         "pool.rejected_rows": trainer.rejected})
     set_seed(args.seed)
@@ -628,11 +645,11 @@ def _train(args: argparse.Namespace, output_dir: Path, tracker: RunTracker) -> i
         team_pool=make_team_pool(DEFAULT_DRILLING_CREWS, DEFAULT_GTM_CREWS),
         movement=trainer.movement,
         production_profile=default_profile(),
-        cost_function=default_npv(trainer.project_start),
+        cost_function=trainer.npv(),
         n_actions=args.action_window,
         risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
         start=trainer.project_start,
-        end=horizon_end(trainer.project_start, trainer.horizon_years),
+        end=trainer.horizon_end(trainer.horizon_years),
     )
     env = VecNormalize(DummyVecEnv([lambda: raw_env]), training=True, norm_obs=True, norm_reward=True)
 
@@ -677,7 +694,7 @@ def _train(args: argparse.Namespace, output_dir: Path, tracker: RunTracker) -> i
         try:
             stats = agent.hot_start(
                 greedy_order=order_from_plan(trainer.default_greedy_plan(deepcopy(wells))),
-                bc_config=behavioral_cloning_config(bc_enabled),
+                bc_config=behavioral_cloning_config(bc_enabled, args.bc_patience),
                 prefill_episodes=prefill_episodes,
                 max_steps=max_steps, output_dir=None, seed=args.seed + k,
             )
@@ -741,7 +758,11 @@ def _train(args: argparse.Namespace, output_dir: Path, tracker: RunTracker) -> i
 
     config = {key: value for key, value in vars(args).items()
               if key not in {"wells_file", "coordinates_file", "output_dir"}}
-    save_model(agent, env, output_dir / "models", extra={"name": args.run_name, "train_args": config})
+    # The resolved settings, not just the --settings path: a model is only
+    # interpretable next to the economics its rewards were priced in.
+    save_model(agent, env, output_dir / "models",
+               extra={"name": args.run_name, "train_args": config,
+                      "settings": trainer.settings.to_dict()})
 
     history = pd.DataFrame(recorder.rows)
     summary = {

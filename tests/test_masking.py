@@ -1,7 +1,7 @@
 """Action masking in ``MaskedCDQN``: an invalid action is never chosen, either
 by ``predict`` (act) or inside ``train`` (bootstrap / Double-DQN target).
 
-Uses a tiny hand-built model, not the trained ``arrive39`` weights: the point
+Uses a tiny hand-built model, not the trained ``bc39`` weights: the point
 is to exercise the masking machinery itself under adversarial masks, including
 ones the real environment would never actually produce (e.g. only the last
 action valid), which is exactly where a masking bug would otherwise hide.

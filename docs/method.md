@@ -150,10 +150,10 @@ masked Double DQN. With `use_cdqn=False` the loss reduces to
 used to measure C-DQN's contribution.
 
 **Behavioural-cloning warm start** (`hyperactive.models.behavioral_cloning`,
-optional, off for the released `arrive39` model). Before Q-learning begins,
-the replay buffer can be pre-filled with noise-free greedy-policy episodes,
-and the Q-network can be pretrained with supervision to reproduce the greedy
-action:
+optional, **on** for the released `bc39` model — the stage the model is named
+after). Before Q-learning begins, the replay buffer can be pre-filled with
+noise-free greedy-policy episodes, and the Q-network can be pretrained with
+supervision to reproduce the greedy action:
 
 * `loss_type="cross_entropy"` treats masked Q-values as softmax-policy logits
   (standard BC).
@@ -167,7 +167,10 @@ cloned policy states off the greedy trajectory, so it survives its own
 mistakes instead of collapsing after the first deviation. After cloning, the
 exploration schedule's initial ε is lowered (`post_bc_exploration_initial_eps`)
 so the pretrained policy is actually used rather than overridden by near-random
-exploration for the whole decay window.
+exploration for the whole decay window. `bc39` was cloned on 30 subsets with
+the cross-entropy loss and ε then started at 0.3 instead of 1.0; the greedy
+replay prefill was left off, so cloning is the only thing the policy inherits
+from the baseline it is measured against.
 
 ## 6. Training regime (`experiments/train.py`)
 
@@ -183,7 +186,10 @@ Each episode can also draw its own crew configuration, economic horizon,
 work window and (optionally) an annual oil-production cap from configured
 mixes, so the policy is trained over a *distribution* of planning regimes
 rather than a single fixed one — this is what makes an out-of-the-box model
-transfer to configurations it wasn't literally trained on. See
-`experiments/train.py`'s module docstring and `--help` for every knob, and
-`models/arrive39/manifest.json` for the exact distribution and hyperparameters
-used to train the released model.
+transfer to configurations it wasn't literally trained on. A mix is sampled
+uniformly over its entries, so repeating one weights it: `bc39`'s
+`--crew-mix 2x1,2x1,2x1,2x5,...` draws the tight `2x1` configuration three
+times as often as the rest, because that is the regime it is most often asked
+for. See `experiments/train.py`'s module docstring and `--help` for every
+knob, and `models/bc39/manifest.json` for the exact distribution and
+hyperparameters used to train the released model.

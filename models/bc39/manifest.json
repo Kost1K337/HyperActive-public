@@ -1,0 +1,87 @@
+{
+  "name": "bc39",
+  "feature_set": "gen39",
+  "action_window": 8,
+  "files": {
+    "model": {
+      "path": "model.zip",
+      "sha256": "889084e585c30f38dd5b75bea0d2f8b25c2893390b29a2ac17541972453e4e20"
+    },
+    "vec_normalize": {
+      "path": "vec_normalize.pkl",
+      "sha256": "7449cff7657d9fcf14f922ebb3e91de2ce04ac479f0b03e8fa8733ea44f6b955"
+    }
+  },
+  "algorithm": {
+    "name": "MaskedCDQN",
+    "use_cdqn": true,
+    "behavioral_cloning": true,
+    "greedy_prefill": false,
+    "net_width": 64,
+    "optimizer": "AdamW",
+    "weight_decay": 0.0001,
+    "learning_rate": 0.0001,
+    "gamma": 0.99,
+    "batch_size": 64,
+    "buffer_size": 100000,
+    "learning_starts": 160,
+    "target_update_interval": 160,
+    "exploration": {
+      "initial_eps": 0.3,
+      "final_eps": 0.05,
+      "fraction": 0.8
+    },
+    "max_grad_norm": 10.0,
+    "total_timesteps": 160000
+  },
+  "behavioral_cloning": {
+    "hot_start_subsets": 30,
+    "demo_episodes": 10,
+    "demo_noise_prob": 0.15,
+    "epochs": 40,
+    "batch_size": 256,
+    "learning_rate": 0.0003,
+    "loss": "cross_entropy",
+    "val_fraction": 0.1,
+    "early_stopping_patience": 16,
+    "target_accuracy": 0.98,
+    "restore_best_weights": true,
+    "post_bc_exploration_initial_eps": 0.3,
+    "mean_validation_accuracy": 0.8583,
+    "q_l2_coef": 0.001
+  },
+  "training_distribution": {
+    "well_count": 16,
+    "sampling": "clusters",
+    "crew_mix": "2x1,2x1,2x1,2x5,3x2,3x4,4x1,4x3,5x2,5x5",
+    "horizon_years_mix": "5,8,10,15,20,25",
+    "drilling_months_mix": "12,12,12,18,18,24,36,48,60",
+    "oil_constraint_prob": 0.5,
+    "oil_constraint_share": "0.08:0.35",
+    "production_profile": "arps",
+    "holdout_fraction": 0.2,
+    "seed": 8
+  },
+  "settings": {
+    "economics": {
+      "equipment_cost": 2500000.0,
+      "oil_cost_per_tone": 109.9,
+      "water_cost_per_tone": 48.6,
+      "repair_per_year": 3093900.0,
+      "maintain_per_year": 2336200.0,
+      "oil_price_per_tone": 13896.0,
+      "discount_rate": 0.125,
+      "build_cost_per_meter": {
+        "ГС+ГРП": 25300.0,
+        "ННС+ГРП": 12900.0,
+        "МЗС": 27300.0,
+        "МЗС+ГРП": 28300.0,
+        "ГС": 23300.0
+      }
+    },
+    "readiness_hour": 8,
+    "days_per_year": 365.0
+  },
+  "training_data": "non-public well pool; not included in this repository",
+  "command": "python experiments/train.py --run-name bc39 --settings models/bc39/training_settings.json --seed 8 --well-count 16 --action-window 8 --rl-episodes 10000 --sampling clusters --net-width 64 --weight-decay 0.0001 --behavioral-cloning 1 --greedy-prefill 0 --hot-start-subsets 30 --bc-patience 16 --greedy-every 50 --crew-mix 2x1,2x1,2x1,2x5,3x2,3x4,4x1,4x3,5x2,5x5 --horizon-mix 5,8,10,15,20,25 --drilling-months-mix 12,12,12,18,18,24,36,48,60 --oil-constraint-prob 0.5 --oil-constraint-share 0.08:0.35"
+}

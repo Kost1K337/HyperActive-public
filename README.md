@@ -11,7 +11,9 @@ The core idea: cast plan construction as a sequential decision problem (a
 Gymnasium environment), train a masked DQN with a C-DQN loss to pick the
 next well, and compare it against a greedy baseline (always take the
 candidate with the highest NPV) and, on small instances, against the
-brute-force optimum over well orderings.
+brute-force optimum over well orderings. The released policy starts from a
+behavioural-cloning warm start - it is first taught to imitate the greedy
+planner, then improves on it with Q-learning.
 
 This repository is the algorithmic core extracted from a larger production
 system: the RL environment, the model, the greedy baseline, and training /
@@ -28,14 +30,14 @@ pip install -e ".[dev]"
 
 hyperactive-plan --wells benchmark/case_10/48/wells_native.xlsx \
     --coordinates benchmark/case_10/48/coordinates_native.xlsx \
-    --model models/arrive39 --start 2026-07-09 --horizon-years 20 --drilling-months 12 \
+    --model models/bc39 --start 2026-07-09 --horizon-years 20 --drilling-months 12 \
     --drilling-crews 2 --gtm-crews 1 --episodes 10 --exploration 0.15 --out plan.csv
 ```
 
 One benchmark cell (one fund, one crew configuration, one work window):
 
 ```bash
-python benchmark/run_benchmark.py --model models/arrive39 --cases benchmark/case_10 \
+python benchmark/run_benchmark.py --model models/bc39 --cases benchmark/case_10 \
     --funds 48 --horizons 12 --crews 2x1 --out runs/benchmark-cell.xlsx
 ```
 
@@ -43,7 +45,7 @@ The full benchmark grid (all four bundled funds x every crew configuration x
 every work window - see [`docs/reproducing.md`](docs/reproducing.md#reproducing-the-benchmark)):
 
 ```bash
-python benchmark/run_benchmark.py --model models/arrive39 --cases benchmark/case_10 \
+python benchmark/run_benchmark.py --model models/bc39 --cases benchmark/case_10 \
     --out runs/benchmark.xlsx
 ```
 
@@ -67,9 +69,9 @@ see [`docs/tracking.md`](docs/tracking.md).
 | [`experiments/train.py`](experiments/train.py) | Train a policy on randomised well subsets and planning regimes. |
 | [`experiments/evaluate.py`](experiments/evaluate.py) | Greedy vs. RL vs. exhaustive search on small instances. |
 | [`experiments/rerun.py`](experiments/rerun.py) | Verify and re-execute a tracked run from its MLflow record. |
-| [`deploy/mlflow`](deploy/mlflow) | A tracking server (MLflow + postgres) for runs that outlive one laptop. |
+| [`deploy/mlflow`](deploy/mlflow) | A tracking server (MLflow + postgres) for runs that outlive one laptop, pre-loaded with the released model's benchmark grid. |
 | [`tests/`](tests) | The test suite: masking, the C-DQN loss formula, greedy selection, environment invariants, behavioural cloning, a golden regression check, and an inference smoke test against the released model. |
-| [`models/arrive39`](models/arrive39) | A released, trained policy with its normalisation statistics and training manifest. |
+| [`models/bc39`](models/bc39) | The released policy - masked C-DQN off a behavioural-cloning warm start - with its normalisation statistics and training manifest. |
 | [`benchmark/run_benchmark.py`](benchmark/run_benchmark.py) | RL-vs-greedy grid benchmark across funds, crew configurations and work windows. |
 | [`benchmark/case_10`](benchmark/case_10) | Four well pools used to validate the benchmark port (see below). |
 

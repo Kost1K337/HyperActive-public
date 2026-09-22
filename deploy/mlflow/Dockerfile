@@ -26,4 +26,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=5 \
 # only needs mlflow-skinny and HTTP - no shared volume with the experiments.
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# The recorded benchmark grid of the released model, replayed by the `seed`
+# service once the server is healthy, so a fresh server is not empty.
+COPY seed_runs.py /mlflow/seed_runs.py
+COPY seed /mlflow/seed
+
 CMD ["/usr/local/bin/entrypoint.sh"]

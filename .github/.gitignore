@@ -1,0 +1,4 @@
+# Scratch copies kept while editing a workflow locally: only the workflows CI
+# actually runs belong in git.
+*.local.yml
+*.local.yaml

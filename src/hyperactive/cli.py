@@ -3,7 +3,7 @@
 Example::
 
     hyperactive-plan --wells data/synthetic/wells.csv --coordinates data/synthetic/clusters.csv \\
-        --model models/arrive39 --start 2026-01-01 --horizon-years 10 --drilling-months 24 \\
+        --model models/bc39 --start 2026-01-01 --horizon-years 10 --drilling-months 24 \\
         --drilling-crews 3 --gtm-crews 2 --out plan.csv
 """
 
@@ -24,11 +24,12 @@ from hyperactive.greedy import PlanBuilder
 from hyperactive.inference import load_policy, plan_with_policy
 from hyperactive.planning import ClusterRandomRiskStrategy, DistanceTeamMovement, TeamManager
 from hyperactive.scenario import (
-    default_npv,
     default_profile,
     horizon_end,
+    make_npv,
     make_team_pool,
     oil_constraints,
+    planning_start,
     work_window_end,
 )
 from hyperactive.tracking import RunTracker, plan_metrics
@@ -61,8 +62,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="hyperactive-plan", description=__doc__.splitlines()[0])
     p.add_argument("--wells", required=True, help="CSV/XLSX well table (see docs/data-format.md)")
     p.add_argument("--coordinates", default=None, help="CSV/XLSX cluster coordinates, metres")
-    p.add_argument("--model", default="models/arrive39", help="directory with manifest.json")
-    p.add_argument("--start", default="2025-01-01", help="planning start date, YYYY-MM-DD")
+    p.add_argument("--model", default="models/bc39", help="directory with manifest.json")
+    p.add_argument("--start", default=None,
+                   help="planning start date, YYYY-MM-DD (default: the earliest well readiness, "
+                        "as in the benchmark)")
     p.add_argument("--horizon-years", type=int, default=10, help="economic horizon")
     p.add_argument("--drilling-months", type=int, default=None,
                    help="work window; all tasks must finish within it (default: the whole horizon)")
@@ -97,13 +100,14 @@ def _plan(args: argparse.Namespace, tracker: RunTracker) -> int:
     if not wells:
         raise SystemExit("No valid wells in the input table.")
     movement = DistanceTeamMovement.from_dicts(load_coordinates(args.coordinates, wells))
-    start = datetime.fromisoformat(args.start)
+    start = datetime.fromisoformat(args.start) if args.start else planning_start(wells)
     end = horizon_end(start, args.horizon_years)
     end_jobs = work_window_end(start, end, args.drilling_months)
 
     tracker.log_environment()
     tracker.log_params({key: value for key, value in vars(args).items()
                         if key not in {"tracking_uri", "experiment", "no_tracking"}})
+    tracker.log_params({"planning_start": start.date().isoformat()})
     tracker.log_dataset(args.wells, "wells")
     if args.coordinates:
         tracker.log_dataset(args.coordinates, "coordinates")
@@ -114,7 +118,7 @@ def _plan(args: argparse.Namespace, tracker: RunTracker) -> int:
         wells=deepcopy(wells),
         team_pool=make_team_pool(args.drilling_crews, args.gtm_crews),
         movement=movement,
-        cost_function=default_npv(start),
+        cost_function=make_npv(start),
         n_actions=bundle.n_actions,
         start=start,
         end=end,
@@ -140,7 +144,7 @@ def _plan(args: argparse.Namespace, tracker: RunTracker) -> int:
     if not args.no_greedy:
         greedy_plan = PlanBuilder(
             start=start, end=end, end_jobs=end_jobs,
-            cost_function=default_npv(start), production_profile=default_profile(),
+            cost_function=make_npv(start), production_profile=default_profile(),
             constraints=oil_constraints(args.oil_cap),
             max_commissioning_days=args.max_commissioning_days,
         ).compile(

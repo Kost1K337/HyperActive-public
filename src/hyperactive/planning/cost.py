@@ -137,10 +137,16 @@ class NPV:
         safe_oil_profile = [np.nan_to_num(p, nan=0.0) for p in context.oil_prod_profile]
         safe_liq_profile = [np.nan_to_num(p, nan=0.0) for p in context.liq_prod_profile]
 
-        capex = (
-            self.capex_cost.build_cost_per_metr.get(context.well.well_type, 0) * safe_length
-            + self.capex_cost.equipment
-        )
+        cost_per_metre = self.capex_cost.build_cost_per_metr.get(context.well.well_type)
+        if cost_per_metre is None:
+            # A missing price would otherwise make the well free to drill and
+            # push it to the top of every plan.
+            raise KeyError(
+                f"No drilling cost per metre for well type {context.well.well_type!r} "
+                f"(well {context.well.name!r}); priced types: "
+                f"{sorted(self.capex_cost.build_cost_per_metr)}"
+            )
+        capex = cost_per_metre * safe_length + self.capex_cost.equipment
         monthly_opex = self.opex_cost.compute(
             monthly_oil_prod=safe_oil_profile,
             monthly_water_prod=[

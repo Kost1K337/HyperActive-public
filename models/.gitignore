@@ -1,0 +1,7 @@
+# A released policy is model.zip + vec_normalize.pkl + manifest.json. Training
+# writes its logs beside the weights it produces; those belong in runs/, not
+# next to a released model.
+episodes.csv
+eval_*.csv
+summary.json
+hot_start.json

@@ -1,0 +1,14 @@
+{
+  "economics": {
+    "water_cost_per_tone": 48.6,
+    "build_cost_per_meter": {
+      "ГС+ГРП": 25300.0,
+      "ННС+ГРП": 12900.0,
+      "МЗС": 27300.0,
+      "МЗС+ГРП": 28300.0,
+      "ГС": 23300.0
+    }
+  },
+  "readiness_hour": 8,
+  "days_per_year": 365
+}
