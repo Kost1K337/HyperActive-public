@@ -10,3 +10,15 @@ dist/
 .pytest_cache/
 .ruff_cache/
 mlruns/
+
+# NLOG (US-F9): full unfiltered NLOG source tables (~267MB) are kept locally
+# for provenance but not committed; only the small, adapter-used, mechanically
+# pre-filtered nlog_dirstelsel_A12.csv is tracked. See benchmark/nlog/README.md
+# for the exact re-download command and sha256 checksums to reproduce them.
+benchmark/nlog/raw/nlog_dirstelsel_20260923.csv
+benchmark/nlog/raw/nlog_gascompos_20260923.csv
+benchmark/nlog/raw/nlog_poroperm_20260923.csv
+benchmark/nlog/raw/nlog_rockeval_20260923.csv
+benchmark/nlog/raw/nlog_stratstelsel_20260923.csv
+benchmark/nlog/raw/nlog_vitriniet_20260923.csv
+benchmark/nlog/raw/*.pdf
