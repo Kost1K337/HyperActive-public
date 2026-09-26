@@ -77,6 +77,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="with --exploration > 0: number of stochastic rollouts, the best is kept")
     p.add_argument("--exploration", type=float, default=0.0)
     p.add_argument("--no-greedy", action="store_true", help="skip the greedy baseline")
+    p.add_argument("--greedy-penalty", choices=("on", "off", "both"), default="on",
+                   help="greedy ranking key: 'on' = NPV - drill_team_penalty (default), "
+                        "'off' = NPV only, the key PlanEnv ranks the policy's candidates by; "
+                        "'both' runs and reports the two baselines")
     p.add_argument("--out", default=None, help="write the RL schedule to this CSV")
     p.add_argument("--experiment", default="hyperactive-plan", help="MLflow experiment name")
     p.add_argument("--tracking-uri", default=None,
@@ -142,26 +146,34 @@ def _plan(args: argparse.Namespace, tracker: RunTracker) -> int:
                                                         args.gtm_crews).items()})
 
     if not args.no_greedy:
-        greedy_plan = PlanBuilder(
-            start=start, end=end, end_jobs=end_jobs,
-            cost_function=make_npv(start), production_profile=default_profile(),
-            constraints=oil_constraints(args.oil_cap),
-            max_commissioning_days=args.max_commissioning_days,
-        ).compile(
-            wells=deepcopy(wells),
-            manager=TeamManager(team_pool=make_team_pool(args.drilling_crews, args.gtm_crews),
-                                movement=movement),
-            risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
-        )
-        greedy_npv = greedy_plan.total_profit()
-        uplift = (rl_npv / greedy_npv - 1.0) * 100.0 if greedy_npv > 0 else float("nan")
-        print(f"greedy plan: {len(greedy_plan.well_plans)} wells, NPV {greedy_npv:,.0f} "
-              f"(RL vs greedy {uplift:+.2f}%)")
-        tracker.log_metrics({"greedy_npv": greedy_npv, "greedy_wells": len(greedy_plan.well_plans),
-                             "uplift_percent": uplift})
-        tracker.log_metrics({f"greedy.{key}": value
-                             for key, value in plan_metrics(greedy_plan, window, args.drilling_crews,
-                                                            args.gtm_crews).items()})
+        for use_penalty in {"on": [True], "off": [False], "both": [False, True]}[args.greedy_penalty]:
+            # Metric names of the default ranking (penalty on) are unchanged;
+            # the NPV-only ranking, the one PlanEnv uses, gets a "_nopenalty" suffix.
+            suffix = "" if use_penalty else "_nopenalty"
+            label = "NPV - drill_team_penalty" if use_penalty else "NPV only"
+            greedy_plan = PlanBuilder(
+                start=start, end=end, end_jobs=end_jobs,
+                cost_function=make_npv(start), production_profile=default_profile(),
+                constraints=oil_constraints(args.oil_cap),
+                use_drill_team_penalty=use_penalty,
+                max_commissioning_days=args.max_commissioning_days,
+            ).compile(
+                wells=deepcopy(wells),
+                manager=TeamManager(team_pool=make_team_pool(args.drilling_crews, args.gtm_crews),
+                                    movement=movement),
+                risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+            )
+            greedy_npv = greedy_plan.total_profit()
+            uplift = (rl_npv / greedy_npv - 1.0) * 100.0 if greedy_npv > 0 else float("nan")
+            print(f"greedy plan ({label}): {len(greedy_plan.well_plans)} wells, "
+                  f"NPV {greedy_npv:,.0f} (RL vs greedy {uplift:+.2f}%)")
+            tracker.log_metrics({f"greedy{suffix}_npv": greedy_npv,
+                                 f"greedy{suffix}_wells": len(greedy_plan.well_plans),
+                                 f"uplift{suffix}_percent": uplift})
+            tracker.log_metrics({f"greedy{suffix}.{key}": value
+                                 for key, value in plan_metrics(greedy_plan, window,
+                                                                args.drilling_crews,
+                                                                args.gtm_crews).items()})
 
     if args.out:
         schedule_frame(plan).to_csv(args.out, index=False)

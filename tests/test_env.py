@@ -127,3 +127,38 @@ class TestReset:
         # trigger_chance=0.0 risk strategy and no exploration in the env itself:
         # reset must be deterministic given the same wells and crews.
         np.testing.assert_array_equal(first, second)
+
+
+class TestGreedyRankingMatchesPlanBuilder:
+    """Row 0 of the observation is the environment's best candidate. Taking it
+    every step must reproduce ``PlanBuilder(use_drill_team_penalty=False)``:
+    the NPV-only greedy baseline is the one ranked by the policy's own rule."""
+
+    def test_first_row_rollout_equals_npv_only_greedy(self, make_well, npv, movement,
+                                                      make_team_pool, linear_profile):
+        from copy import deepcopy
+
+        from hyperactive.greedy import PlanBuilder
+        from hyperactive.planning import TeamManager
+
+        # Equal rates across clusters: ties decide the order, as on SPE9.
+        wells = [make_well(f"w{i}", cluster=f"C{i % 3}", oil_rate=30.0 if i % 2 else 40.0)
+                 for i in range(6)]
+        env = PlanEnv(
+            wells=deepcopy(wells), team_pool=make_team_pool(2, 1), movement=movement,
+            cost_function=npv, n_actions=N_ACTIONS, start=START, end=END,
+            production_profile=linear_profile,
+            risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+        )
+        log = run_to_completion(env)
+        env_order = [c.well.name for c in log[-1]["info"]["final_plan"].well_plans]
+
+        greedy = PlanBuilder(start=START, end=END, cost_function=npv,
+                             production_profile=linear_profile,
+                             use_drill_team_penalty=False).compile(
+            wells=list(wells),
+            manager=TeamManager(team_pool=make_team_pool(2, 1), movement=movement),
+            risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+        )
+        assert env_order == [c.well.name for c in greedy.well_plans]
+        assert log[-1]["info"]["final_npv"] == pytest.approx(greedy.total_profit())

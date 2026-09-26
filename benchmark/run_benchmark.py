@@ -5,7 +5,9 @@ For every grid cell (fund x crews x work window) two plans are built:
 
 * ``rl`` - the policy, ``--episodes`` rollouts with exploration ``--exploration``
   (episode ``k`` is seeded with ``k``), the plan with the highest NPV is kept;
-* ``greedy`` - one deterministic greedy pass.
+* ``greedy`` - one deterministic greedy pass ranked by ``NPV - drill_team_penalty``;
+* ``greedy_nopenalty`` - the same pass ranked by NPV alone, the rule ``PlanEnv``
+  ranks the policy's candidates by (``uplift_nopenalty_percent``).
 
 The uplift of the cell is ``NPV_rl / NPV_greedy - 1``.
 
@@ -227,6 +229,25 @@ def run_cell(fund: Fund, drilling: int, gtm: int, months: int, cfg: Config) -> d
     if row["greedy_npv"] > 0:
         row["uplift_percent"] = round((row["rl_npv"] / row["greedy_npv"] - 1.0) * 100.0, 2)
         row["delta_wells"] = row["rl_wells"] - row["greedy_wells"]
+
+    # The same greedy pass ranked by NPV alone: PlanEnv orders the policy's
+    # candidates by NPV without drill_team_penalty, so this is the baseline on
+    # the policy's own ranking rule. The penalised pass above stays as is.
+    greedy_plan = PlanBuilder(
+        start=start, end=plan_end, end_jobs=jobs_end,
+        cost_function=make_npv(start, cfg.economics),
+        production_profile=ArpsDeclineProductionProfile(),
+        use_drill_team_penalty=False,
+    ).compile(
+        wells=copy.deepcopy(wells),
+        manager=TeamManager(team_pool=make_team_pool(drilling, gtm), movement=movement),
+        risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+    )
+    row.update({"greedy_nopenalty_wells": len(greedy_plan.well_plans),
+                "greedy_nopenalty_npv": greedy_plan.total_profit()})
+    if row["greedy_nopenalty_npv"] > 0:
+        row["uplift_nopenalty_percent"] = round(
+            (row["rl_npv"] / row["greedy_nopenalty_npv"] - 1.0) * 100.0, 2)
     return row
 
 
@@ -236,6 +257,7 @@ def run_cell(fund: Fund, drilling: int, gtm: int, months: int, cfg: Config) -> d
 
 COLUMNS = ["fund", "fund_wells", "start", "crews", "drilling_crews", "gtm_crews", "work_window_months",
            "rl_wells", "greedy_wells", "delta_wells", "rl_npv", "greedy_npv", "uplift_percent",
+           "greedy_nopenalty_wells", "greedy_nopenalty_npv", "uplift_nopenalty_percent",
            "rl_oil", "greedy_oil", "rl_selected_episode", "rl_seconds", "greedy_seconds"]
 
 
