@@ -526,3 +526,76 @@ explicitly requested.
 
 See [`benchmark/results_real_pipeline.csv`](../results_real_pipeline.csv)
 for the combined Egg Model + SPE9 real-pipeline results table.
+
+
+## Baseline fairness correction (bug-fix pass)
+
+The earlier numbers in this README (Section B, US-F4: bc39 -19.75% vs greedy) are kept as recorded; this
+section supersedes them for the bc39-vs-greedy comparison. Overview of the
+whole pass: [`../BASELINE_FAIRNESS_CORRECTION.md`](../BASELINE_FAIRNESS_CORRECTION.md).
+
+**What was wrong.** The greedy baseline `PlanBuilder` ranks candidates by
+`NPV - drill_team_penalty` (its default, used by `hyperactive-plan`), while
+`PlanEnv` -- which builds the candidate set bc39 sees and acts on -- ranks
+candidates by NPV alone. "Greedy" and "the environment's best-ranked
+action" were therefore two different policies, and wherever candidate NPVs
+tie (identical rates) or the penalty reorders them, the two rules take
+different wells.
+
+**Fix.** Both greedy variants are now reported. The PRIMARY baseline is
+`PlanBuilder(use_drill_team_penalty=False)` (`--greedy-penalty off`), the
+ranking rule bc39 acts under; a regression test (`tests/test_env.py`,
+`TestGreedyRankingMatchesPlanBuilder`) checks that always taking
+`PlanEnv`'s row 0 reproduces it exactly. The penalised greedy is kept as a
+SECONDARY baseline: it is the rule the paper's method section describes,
+and it can be the stronger heuristic. bc39, its checkpoint and its
+environment are unchanged; the bc39 number below is the same deterministic
+10-episode run as before.
+
+Command (same parameters as before, both greedy variants):
+
+```bash
+.venv_real/bin/hyperactive-plan \
+  --wells benchmark/spe9/hyperactive_input/wells.xlsx \
+  --coordinates benchmark/spe9/hyperactive_input/coordinates.xlsx \
+  --model models/bc39 --start 2026-01-01 --horizon-years 20 \
+  --drilling-months 12 --drilling-crews 2 --gtm-crews 1 \
+  --episodes 10 --exploration 0.15 --no-tracking --greedy-penalty both \
+  --out benchmark/spe9/plan_bc39_v2.csv
+```
+
+```
+wells: 26 valid, 0 rejected
+RL plan (bc39): 13 wells, NPV 47,324,417,883
+greedy plan (NPV only): 12 wells, NPV 43,808,870,706 (RL vs greedy +8.02%)
+greedy plan (NPV - drill_team_penalty): 16 wells, NPV 58,971,812,911 (RL vs greedy -19.75%)
+```
+
+| | wells | NPV |
+|---|---:|---:|
+| bc39 | 13 | 47,324,417,883 |
+| greedy, NPV only (PRIMARY) | 12 | 43,808,870,706 |
+| greedy, NPV - drill_team_penalty (secondary, previously the only baseline) | 16 | 58,971,812,911 |
+
+bc39 vs primary greedy: **+8.02%**; vs penalised greedy:
+-19.75% (previously reported: -19.75%).
+
+The sign flips. 25 producers share one rate, so tie-breaking decides the
+plan: the NPV-only greedy scores 43.81e9, bc39 beats it by +8.02%. But the
+penalised greedy, which breaks the ties differently, scores 58.97e9 and
+still beats bc39 by 19.75%. Read honestly: bc39 improves on the ranking rule
+it acts under, but on SPE9 a simple heuristic (NPV - drill_team_penalty) is
+clearly better than bc39; the +8.02% must not be reported without that.
+
+**Disclosed limitation: feature-scale saturation in the bc39 checkpoint.**
+`src/hyperactive/env/features.py` feeds `oil_rate`, `liq_rate`, `cost_npv`,
+`cash_flow`, `capex` and `travel_cost` to the network as absolute values;
+bc39's VecNormalize statistics were fit on its training distribution and
+clip normalised features at +/-10 (`clip_obs=10.0`). On this benchmark
+**86.2% of candidate rows** have at least one feature at the clip bound
+(row-0 rollout, 87 valid candidate rows; per feature: cost_npv 86%, cash_flow 86%, oil_rate 25%, job_window_share 5%). On the
+clipped features the network cannot tell those candidates apart, so bc39 is
+here being evaluated outside the input range it was trained on. This is
+disclosed, not corrected: no retraining and no inference-time rescaling was
+applied, because either would change the model after the fact without
+proper training and validation.

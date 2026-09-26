@@ -85,3 +85,38 @@ configuration), not an exhaustive sweep -- `results_bc39.xlsx` also has
 be populated with medians/win-rates across a larger grid if `--horizons`
 and `--crews` were widened; that fuller grid was not run here since a single
 representative comparison point per fund was sufficient for this story.
+
+## Baseline fairness correction (bug-fix pass)
+
+The numbers above (US-F5) are kept as recorded. Overview of the whole pass:
+[`../BASELINE_FAIRNESS_CORRECTION.md`](../BASELINE_FAIRNESS_CORRECTION.md).
+
+**What was wrong.** The greedy baseline `PlanBuilder` ranks candidates by
+`NPV - drill_team_penalty`; `PlanEnv`, which builds the candidate set bc39
+acts on, ranks by NPV alone, so the two were not compared under the same
+ranking rule. **Fix.** `run_benchmark.py` now also runs
+`PlanBuilder(use_drill_team_penalty=False)` in every cell and writes
+`greedy_nopenalty_wells`, `greedy_nopenalty_npv` and
+`uplift_nopenalty_percent` next to the existing (penalised) `greedy_*` and
+`uplift_percent` columns. The NPV-only greedy is the PRIMARY baseline; the
+penalised one is kept as secondary.
+
+Rerun with the identical command above (wall-clock 3.5 min, 4 workers);
+`results_bc39.xlsx` now holds both baselines:
+
+| fund | bc39 wells / NPV | greedy NPV only (PRIMARY) wells / NPV | greedy NPV - penalty wells / NPV | bc39 vs primary | bc39 vs penalised |
+|---:|---:|---:|---:|---:|---:|
+| 48  | 10 / 6,784,442,227  | 6 / 4,860,649,333  | 6 / 4,860,649,333  | **+39.58%** | +39.58% |
+| 64  | 10 / 12,206,853,099 | 7 / 10,603,736,532 | 7 / 10,603,736,532 | **+15.12%** | +15.12% |
+| 150 | 9 / 8,817,538,841   | 8 / 8,155,481,707  | 8 / 8,155,481,707  | **+8.12%**  | +8.12%  |
+| 200 | 10 / 8,784,582,880  | 6 / 6,950,302,884  | 6 / 6,950,302,884  | **+26.39%** | +26.39% |
+
+No change on case_10: both greedy rules give the same plan in every cell,
+and the bc39 runs reproduce the earlier NPVs exactly.
+
+Feature-scale check (disclosed limitation of bc39 on out-of-range inputs,
+see the overview): candidate rows with any feature at the VecNormalize
++/-10 clip bound, row-0 rollout: fund 48 2.1%, 64 12.5%, 150 6.2%, 200
+2.3%, all on `job_window_share` only; none of the absolute-scale economic
+features saturate. This is bc39's own data distribution, so the effect is
+minor here.

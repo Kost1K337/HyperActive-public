@@ -203,3 +203,61 @@ Full RL schedule: [`plan_bc39.csv`](plan_bc39.csv).
 See [`benchmark/results_real_pipeline.csv`](../results_real_pipeline.csv)
 for the combined results table across all benchmarks (Egg Model, SPE9,
 SPE10, ...).
+
+
+## Baseline fairness correction (bug-fix pass)
+
+The earlier numbers in this README (US-F6: bc39 0.00% vs greedy) are kept as recorded; this
+section supersedes them for the bc39-vs-greedy comparison. Overview of the
+whole pass: [`../BASELINE_FAIRNESS_CORRECTION.md`](../BASELINE_FAIRNESS_CORRECTION.md).
+
+**What was wrong.** The greedy baseline `PlanBuilder` ranks candidates by
+`NPV - drill_team_penalty` (its default, used by `hyperactive-plan`), while
+`PlanEnv` -- which builds the candidate set bc39 sees and acts on -- ranks
+candidates by NPV alone. "Greedy" and "the environment's best-ranked
+action" were therefore two different policies, and wherever candidate NPVs
+tie (identical rates) or the penalty reorders them, the two rules take
+different wells.
+
+**Fix.** Both greedy variants are now reported. The PRIMARY baseline is
+`PlanBuilder(use_drill_team_penalty=False)` (`--greedy-penalty off`), the
+ranking rule bc39 acts under; a regression test (`tests/test_env.py`,
+`TestGreedyRankingMatchesPlanBuilder`) checks that always taking
+`PlanEnv`'s row 0 reproduces it exactly. The penalised greedy is kept as a
+SECONDARY baseline: it is the rule the paper's method section describes,
+and it can be the stronger heuristic. bc39, its checkpoint and its
+environment are unchanged; the bc39 number below is the same deterministic
+10-episode run as before.
+
+Command (same parameters as before, both greedy variants):
+
+```bash
+.venv_real/bin/hyperactive-plan \
+  --wells benchmark/spe10/hyperactive_input/wells.xlsx \
+  --coordinates benchmark/spe10/hyperactive_input/coordinates.xlsx \
+  --model models/bc39 --start 2026-01-01 --horizon-years 20 \
+  --drilling-months 12 --drilling-crews 2 --gtm-crews 1 \
+  --episodes 10 --exploration 0.15 --no-tracking --greedy-penalty both \
+  --out benchmark/spe10/plan_bc39.csv
+```
+
+```
+wells: 5 valid, 0 rejected
+RL plan (bc39): 5 wells, NPV 1,764,158,272
+greedy plan (NPV only): 5 wells, NPV 1,764,158,272 (RL vs greedy +0.00%)
+greedy plan (NPV - drill_team_penalty): 5 wells, NPV 1,764,158,272 (RL vs greedy +0.00%)
+```
+
+| | wells | NPV |
+|---|---:|---:|
+| bc39 | 5 | 1,764,158,272 |
+| greedy, NPV only (PRIMARY) | 5 | 1,764,158,272 |
+| greedy, NPV - drill_team_penalty (secondary, previously the only baseline) | 5 | 1,764,158,272 |
+
+bc39 vs primary greedy: **+0.0000%**; vs penalised greedy:
++0.0000% (previously reported: 0.00%).
+
+No change: 5 wells, 2 crews, no contention; all three plans are identical.
+
+Feature-scale check (disclosed limitation of bc39 on out-of-range inputs,
+see the overview): 0.0% of candidate rows clipped (15 rows) -- not affected.

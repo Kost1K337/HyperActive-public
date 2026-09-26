@@ -7,3 +7,11 @@ fund,method,npv,uplift_vs_greedy_percent
 150,bc39_maskedcdqn,8817538841,8.12
 200,greedy,6950302884,
 200,bc39_maskedcdqn,8784582880,26.39
+48,greedy_npv_only (CORRECTED primary),4860649333,
+48,bc39_maskedcdqn (CORRECTED vs primary),6784442227,39.58
+64,greedy_npv_only (CORRECTED primary),10603736532,
+64,bc39_maskedcdqn (CORRECTED vs primary),12206853099,15.12
+150,greedy_npv_only (CORRECTED primary),8155481707,
+150,bc39_maskedcdqn (CORRECTED vs primary),8817538841,8.12
+200,greedy_npv_only (CORRECTED primary),6950302884,
+200,bc39_maskedcdqn (CORRECTED vs primary),8784582880,26.39
