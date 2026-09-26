@@ -1,0 +1,9 @@
+fund,method,npv,uplift_vs_greedy_percent
+48,greedy,4860649333,
+48,bc39_maskedcdqn,6784442227,39.58
+64,greedy,10603736532,
+64,bc39_maskedcdqn,12206853099,15.12
+150,greedy,8155481707,
+150,bc39_maskedcdqn,8817538841,8.12
+200,greedy,6950302884,
+200,bc39_maskedcdqn,8784582880,26.39
