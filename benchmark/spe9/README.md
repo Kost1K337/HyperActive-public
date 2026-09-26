@@ -1,5 +1,20 @@
 # SPE9 benchmark (9th SPE Comparative Solution Project)
 
+## Section A: proxy-objective AttentionDuelingQuantileQ work (superseded/alternative, kept for history)
+
+Everything below this line up to "Section B" is the ORIGINAL US-E2/US-E3
+work: a custom, standalone candidate-set evaluator
+(`benchmark/common/sequencing_env.py`) with an analytic proxy objective (not
+simulated NPV) and a from-scratch attention-based dueling quantile Q-network
+(`benchmark/common/attention_dueling_quantile_q.py`). It is **superseded** by
+Section B (below the divider near the end of this file), which runs this
+same dataset through HyperActive-public's real, deployed pipeline
+(`hyperactive-plan`, the real greedy `PlanBuilder`, the real MaskedCDQN
+`models/bc39` checkpoint, and the real NPV/Arps-decline economics). Section A
+is kept, unmodified in substance, as an honest ablation/alternative-
+architecture trail -- do not read its numbers as HyperActive NPV; they use a
+different, proxy objective on a different (non-HyperActive) evaluator.
+
 ## Source
 
 - Official SPE benchmark: "The 9th SPE Comparative Solution Project" — water-flooding
@@ -336,3 +351,94 @@ by hundreds), plausibly because SPE9's single, stationary case gives
 REINFORCE an easier target to preserve the bootstrap's imitation gains on,
 consistent with the note in the no-bootstrap run above about SPE9 being an
 "easier, more stationary target" than the Egg Model's 12-case setting.
+
+---
+
+## Section B: real HyperActive pipeline with MaskedCDQN/bc39 (current, US-F2)
+
+This section supersedes Section A above as the current benchmark for this
+dataset: it runs the same 26 real SPE9 wells through HyperActive-public's
+actual, deployed planner -- not the proxy evaluator described in Section A.
+
+### Real-pipeline adapter (`build_hyperactive_input.py`)
+
+`build_hyperactive_input.py` parses the same vendored deck (`raw/SPE9.DATA`)
+with the same shared parser (`benchmark/common/eclipse_parse.py`) as
+`adapter.py`, but writes the real HyperActive schema documented in
+[`docs/data-format.md`](../../docs/data-format.md) instead:
+`benchmark/spe9/hyperactive_input/wells.xlsx` and `coordinates.xlsx`. Full
+mapping detail and disclosures are in `build_hyperactive_input.py`'s module
+docstring; in short:
+
+* one cluster per well (no pad grouping in the archive);
+* `well_type = "ГС"` for all 26 wells;
+* `x`/`y` from real (I, J) WELSPECS positions x the deck's real 300 ft
+  (91.44 m) cell size; `length` from each well's real COMPDAT K1:K2
+  completion range x the deck's real 20 ft layer thickness (producers 60 ft
+  = 18.29 m, injector INJE1 100 ft = 30.48 m);
+* producers: `oil_rate` = the deck's REAL day-0 WCONPROD target (1500 STB/d,
+  converted to t/d with the deck's real 720.6 kg/m3 oil density) -- unlike
+  the Egg Model, this is not a permeability proxy. `liq_rate` adds an
+  assumed 5% water cut (proxy, not measured -- the deck gives no separate
+  liquid-rate target). The deck's later rate-cut phase (100 STB/d at day
+  300) and recovery (1500 STB/d at day 360) are real and documented but NOT
+  representable in HyperActive's schema (`ArpsDeclineProductionProfile`
+  models one starting rate that declines monotonically, with no scheduled
+  rate-change mechanism) -- this loses real information from the source
+  deck, disclosed rather than silently dropped;
+* injector INJE1: `liq_rate` = the deck's real 5000 STB/d WCONINJE target
+  (converted with real water density 1009.5 kg/m3), `oil_rate = 0`.
+
+**Same limitation as the Egg Model:** HyperActive's economics have no
+injection-support concept, so INJE1 shows negative well NPV in the results
+below -- disclosed, not a bug.
+
+### Real pipeline run
+
+```bash
+python benchmark/spe9/build_hyperactive_input.py
+
+.venv_real/bin/hyperactive-plan \
+  --wells benchmark/spe9/hyperactive_input/wells.xlsx \
+  --coordinates benchmark/spe9/hyperactive_input/coordinates.xlsx \
+  --model models/bc39 --start 2026-01-01 --horizon-years 20 \
+  --drilling-months 12 --drilling-crews 2 --gtm-crews 1 \
+  --episodes 10 --exploration 0.15 --no-tracking \
+  --out benchmark/spe9/plan_bc39.csv
+```
+
+One command runs both the real greedy `PlanBuilder` baseline and the real
+deployed `models/bc39` MaskedCDQN policy (10 stochastic rollouts, best kept).
+
+**Real output (verbatim console output of the command above):**
+
+```
+wells: 26 valid, 0 rejected
+RL plan (bc39): 6 wells, NPV 21,876,851,268
+greedy plan: 6 wells, NPV 21,876,851,268 (RL vs greedy +0.00%)
+```
+
+RL and greedy selected the identical 6-well plan here (all 25 producers have
+identical mapped oil/liq rates, so with no readiness-date differentiation
+among wells there is little for a policy to gain over greedy by well
+choice). As with the Egg Model, only 6 of 26 wells fit the 12-month/2-crew
+work window because of the `min_days_between_clusters = 90` day
+rig-down/rig-up floor charged between every pair of the one-cluster-per-well
+mapping -- see the Egg Model README's Section B for the full explanation;
+the same effect applies here unchanged.
+
+Full RL schedule: [`plan_bc39.csv`](plan_bc39.csv).
+
+### Exhaustive comparison
+
+Not run for SPE9: with 26 wells (`26! `, astronomically infeasible) and no
+well-count-limited PRD requirement for this dataset (unlike the Egg Model's
+12), `experiments/evaluate.py --exhaustive-max-wells 8` would only ever
+exercise a random 8-well subset that says nothing about SPE9-scale planning;
+the Egg Model README documents that comparison instead, where it was
+explicitly requested.
+
+### Results table
+
+See [`benchmark/results_real_pipeline.csv`](../results_real_pipeline.csv)
+for the combined Egg Model + SPE9 real-pipeline results table.
