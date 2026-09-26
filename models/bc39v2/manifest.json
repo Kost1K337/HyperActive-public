@@ -1,0 +1,78 @@
+{
+  "feature_set": "gen39",
+  "feature_scaling": "pool_relative",
+  "action_window": 8,
+  "files": {
+    "model": {
+      "path": "model.zip",
+      "sha256": "91fb5052d827c351967f40787768d3fe93963c66f75253d9d7eb97b1e26fb235"
+    },
+    "vec_normalize": {
+      "path": "vec_normalize.pkl",
+      "sha256": "1e95f3b83265469f0d59a984407cca2e68ac6aa2ff6787618adb9677cdf17873"
+    }
+  },
+  "name": "bc39v2",
+  "train_args": {
+    "settings": "models/bc39v2/training_settings.json",
+    "run_name": "bc39v2",
+    "well_count": 16,
+    "action_window": 8,
+    "rl_episodes": 4000,
+    "seed": 8,
+    "split_seed": null,
+    "device": "cpu",
+    "holdout_fraction": 0.2,
+    "eval_subsets": 30,
+    "sampling": "clusters",
+    "greedy_every": 50,
+    "save_interval": 500,
+    "crew_mix": "2x1,2x1,2x1,2x5,3x2,3x4,4x1,4x3,5x2,5x5",
+    "horizon_mix": "5,8,10,15,20,25",
+    "horizon_years": null,
+    "drilling_months_mix": "12,12,12,18,18,24,36,48,60",
+    "oil_constraint_prob": 0.5,
+    "oil_constraint_share": "0.08:0.35",
+    "use_cdqn": 1,
+    "net_width": 64,
+    "weight_decay": 0.0001,
+    "exploration_initial_eps": 1.0,
+    "exploration_final_eps": 0.05,
+    "exploration_fraction": 0.8,
+    "hot_start_subsets": 30,
+    "behavioral_cloning": 1,
+    "bc_patience": 16,
+    "greedy_prefill": 0,
+    "experiment": "hyperactive-training",
+    "tracking_uri": null,
+    "no_tracking": true
+  },
+  "settings": {
+    "economics": {
+      "equipment_cost": 2500000.0,
+      "oil_cost_per_tone": 109.9,
+      "water_cost_per_tone": 48.6,
+      "repair_per_year": 3093900.0,
+      "maintain_per_year": 2336200.0,
+      "oil_price_per_tone": 13896.0,
+      "discount_rate": 0.125,
+      "build_cost_per_meter": {
+        "ГС+ГРП": 25300.0,
+        "ННС+ГРП": 12900.0,
+        "МЗС": 27300.0,
+        "МЗС+ГРП": 28300.0,
+        "ГС": 23300.0
+      }
+    },
+    "readiness_hour": 8,
+    "days_per_year": 365.0
+  },
+  "training_data": "benchmark/case_10/200/wells_200.xlsx + coordinates_200.xlsx (public, bundled); 160 train / 40 hold-out wells (split seed 8)",
+  "training_budget": {
+    "total_timesteps": 64000,
+    "rl_episodes_completed": 10494,
+    "bc39_total_timesteps": 160000,
+    "note": "40% of bc39's timestep budget, chosen to fit a ~90 min CPU time box; the run completed its full 64,000-step schedule (not cut short)"
+  },
+  "command": "python experiments/train.py --run-name bc39v2 --wells-file benchmark/case_10/200/wells_200.xlsx --coordinates-file benchmark/case_10/200/coordinates_200.xlsx --settings models/bc39/training_settings.json --seed 8 --well-count 16 --action-window 8 --rl-episodes 4000 --sampling clusters --net-width 64 --weight-decay 0.0001 --behavioral-cloning 1 --greedy-prefill 0 --hot-start-subsets 30 --bc-patience 16 --greedy-every 50 --crew-mix 2x1,2x1,2x1,2x5,3x2,3x4,4x1,4x3,5x2,5x5 --horizon-mix 5,8,10,15,20,25 --drilling-months-mix 12,12,12,18,18,24,36,48,60 --oil-constraint-prob 0.5 --oil-constraint-share 0.08:0.35 --save-interval 500 --no-tracking"
+}
