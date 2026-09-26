@@ -1,0 +1,69 @@
+! ***************************************************
+! *  MoReS input file to create run-file Basis.run, *
+! *  to be used in adjoint-based optimization loop. *
+! *  Basis.run describes a 3D oil-water reservoir.  *
+! *								    *
+! *  Authors : Gijs van Essen & Maarten Zandvliet   *
+! *  Date	 : January 2006                         *
+! ***************************************************
+
+! Echo all the input data
+ECHO OFF
+
+! Definition of the project
+PROJECT MORES Basis.run 
+
+! Define the grid size variables
+NX = 60; NY = 60; NZ = 7; NF = 1;
+
+! Define the phases
+WATER = ON; OIL = ON;
+
+! Define the components
+H2O = ON; HEAVY = ON;
+
+! End of project definition
+ENDPROJ
+
+! Input and output in SI units
+INCLUDE UNITS_SI.INC
+INCLUDE QC_Array2.inc
+LONGTIME   = DAY
+LIQVOLRATE = M3/DAY
+LIQVOLUME  = M3
+
+! Geological data (grid block size, permeability, porosity)
+INCLUDE Geo_Data.inc
+
+! Fluid data (PVT, rel. perm., cap. pressures)
+INCLUDE Fluid_Data.inc
+
+! Initialisation (initial pressures and saturations)
+INCLUDE Initial_Data.inc
+
+! Well data (locations, constraints, control inputs)
+INCLUDE Well_Data.inc
+
+! Change linear solver (suggested solver for adjoint run)
+LINDATA.METHOD = ORTHOMIN
+
+! Remaing details
+UTILITIES.DATUM_LEVEL = GEODATA.ORIGINZ
+INCLUDE SATplot.inc
+
+NETWORK test
+! insert gathering centre gc_1 in network user_net
+
+test TSS_MON ON TIME = TIME STEP 30*DAY
+
+! Run foward simulation
+SIMDATA BEGIN
+   TSSDATA.MAXTIMESTEPSIZE     = 30 * DAY
+   TSSDATA.STARTTIMESTEPSIZE   = 0.1 *DAY
+   CHECK_INPUT
+SIMDATA END
+
+SIMULATE UNTIL TIME = 3600 * DAY;
+! SIMULATE UNTIL TIME = 60 * DAY;
+! SIMULATE UNTIL TIME = 90 * DAY;
+! SIMULATE UNTIL TIME = 120 * DAY;
