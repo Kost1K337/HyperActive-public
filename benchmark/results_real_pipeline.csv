@@ -1,6 +1,10 @@
 benchmark,method,wells_scheduled,wells_total,npv,uplift_vs_greedy_percent,notes
-egg_model,greedy,6,12,2087643412,,real hyperactive-plan run (see egg_model/README.md Section B)
-egg_model,bc39_maskedcdqn,6,12,2057693725,-1.43,real hyperactive-plan run, 10 episodes exploration 0.15
+egg_model,greedy,6,12,2087643412,,"HISTORY (US-F2): one-cluster-per-well mapping, real hyperactive-plan run (see egg_model/README.md Section B)"
+egg_model,bc39_maskedcdqn,6,12,2057693725,-1.43,"HISTORY (US-F2): one-cluster-per-well mapping, real hyperactive-plan run, 10 episodes exploration 0.15"
 egg_model,exhaustive_8well_subset,,,,,"attempted (experiments/evaluate.py --subsets 3 --well-count 8), killed after ~50 min wall-clock without output; ICOMP paper reports ~7364s (~2h) per 8-well subset on its own hardware, so this exceeded the time budget for this pass -- documented follow-up, not skipped silently"
-spe9,greedy,6,26,21876851268,,real hyperactive-plan run (see spe9/README.md Section B)
-spe9,bc39_maskedcdqn,6,26,21876851268,0.00,real hyperactive-plan run, 10 episodes exploration 0.15
+spe9,greedy,6,26,21876851268,,"HISTORY (US-F2): one-cluster-per-well mapping, real hyperactive-plan run (see spe9/README.md Section B)"
+spe9,bc39_maskedcdqn,6,26,21876851268,0.00,"HISTORY (US-F2): one-cluster-per-well mapping, real hyperactive-plan run, 10 episodes exploration 0.15"
+egg_model,greedy,12,12,1529277304,,"CURRENT (US-F4): spatial-binning cluster mapping (250 m bins, 4 clusters), real hyperactive-plan run (see egg_model/README.md Section B)"
+egg_model,bc39_maskedcdqn,9,12,1722483028,12.63,"CURRENT (US-F4): spatial-binning cluster mapping (250 m bins, 4 clusters), real hyperactive-plan run, 10 episodes exploration 0.15"
+spe9,greedy,16,26,58971812911,,"CURRENT (US-F4): spatial-binning cluster mapping (700 m bins, 7 clusters), real hyperactive-plan run (see spe9/README.md Section B)"
+spe9,bc39_maskedcdqn,13,26,47324417883,-19.75,"CURRENT (US-F4): spatial-binning cluster mapping (700 m bins, 7 clusters), real hyperactive-plan run, 10 episodes exploration 0.15"

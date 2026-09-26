@@ -21,12 +21,32 @@ proxy evaluator's.
 MAPPING CHOICES (documented honestly, same disclosure discipline as
 ``adapter.py``):
 
-* ``cluster``: one cluster per well (``cluster = well name``). The Egg Model
-  archive has no HyperActive-style pad/cluster grouping -- its 12 wells sit
-  on a single 60x60 grid with no vendored pad assignment -- so each well is
-  its own single-well cluster. This makes crew move time between any two
-  wells a pure function of real (I, J) distance (see coordinates below),
-  which is the most defensible choice absent real pad data.
+* ``cluster`` (US-F4, current default): the Egg Model archive has no
+  vendored pad/cluster grouping, so clusters are derived from the wells'
+  real (I, J) grid positions using fixed-size spatial binning -- each well's
+  (I, J) is quantized into a square bin of ``CLUSTER_BIN_M = 250`` m
+  (``n = round(250 / 8) = 31`` grid cells per side, since ``DX = DY = 8``
+  m), and wells sharing a bin become one cluster. 250 m was chosen (over a
+  few candidates tried: 150 m gave 8 clusters averaging 1.5 wells each,
+  still close to one-per-well; 300 m gave 4 clusters but one 5-well and one
+  3-cell-radius cluster reaching further than the wells' natural spacing
+  would justify) because it is the smallest threshold that clears every
+  well's real nearest-neighbour gap in this field (all 12 wells' nearest
+  real neighbour is >= 109 m / 13.6 cells apart -- this is a wide-spaced
+  5-spot-style waterflood pattern, not a padded field) while producing 4
+  clusters of size [2, 3, 3, 4] (mean 3.0 wells/cluster), matching the
+  "roughly 2-5 wells per cluster, not 1, not all-in-one" target. Binning
+  (fixed-size grid quantization) was used instead of nearest-neighbour
+  agglomerative clustering because Egg Model's producers/injectors are laid
+  out with fairly uniform pairwise spacing (13.6-18.4 grid cells to nearest
+  neighbour) with no natural single-linkage gap to cut at, so a chosen
+  threshold is a deliberate spatial-radius choice either way; binning keeps
+  cluster shapes bounded (a square of side 250 m) rather than a possible
+  single-linkage chain across the whole field. See ``_bin_cluster`` below.
+  Cluster coordinates for the movement model use each cluster's centroid
+  (mean x/y of its member wells). The prior one-cluster-per-well mapping is
+  still produced, for comparison, in ``wells_one_cluster_per_well.xlsx`` /
+  ``coordinates_one_cluster_per_well.xlsx`` (see ``main()``).
 * ``field`` = ``"egg_model"``, ``layer`` = ``"egg"`` (free text, not used by
   planner logic per docs/data-format.md).
 * ``well_type``: HyperActive's task-chain vocabulary
@@ -114,6 +134,30 @@ PRODUCER_WATER_CUT_ASSUMPTION = 0.05  # assumed, not measured
 
 INIT_ENTRY_DATE = "2026-01-01"  # all 12 wells assumed simultaneously ready (candidate set)
 
+CLUSTER_BIN_M = 250.0  # spatial-binning threshold, see module docstring (US-F4)
+
+
+def _bin_cluster(positions: dict[str, tuple[int, int]], cell_size_m: float, bin_m: float) -> dict[str, str]:
+    """Group wells into clusters by fixed-size spatial binning on (I, J).
+
+    Each well's grid position is quantized into a square bin of side
+    ``bin_m`` metres (converted to a whole number of grid cells); wells
+    landing in the same bin become one cluster. See module docstring for why
+    binning (not nearest-neighbour agglomerative clustering) was used and
+    how ``bin_m`` was chosen.
+    """
+    n_cells = max(1, round(bin_m / cell_size_m))
+    bin_of: dict[tuple[int, int], list[str]] = {}
+    for name, (i, j) in sorted(positions.items()):
+        key = ((i - 1) // n_cells, (j - 1) // n_cells)
+        bin_of.setdefault(key, []).append(name)
+    cluster_of: dict[str, str] = {}
+    for (bi, bj), names in sorted(bin_of.items()):
+        cluster_id = f"EGG_C{bi:02d}_{bj:02d}"
+        for name in names:
+            cluster_of[name] = cluster_id
+    return cluster_of
+
 
 def _perm_array(realization: str = "PERM1_ECL.INC") -> list[float]:
     text = read_deck(RAW_ROOT / "Permeability_Realizations_subset10" / realization)
@@ -141,12 +185,20 @@ def _well_positions() -> dict[str, tuple[int, int]]:
     return positions
 
 
-def build() -> tuple[pd.DataFrame, pd.DataFrame]:
+def build() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Return (wells, coordinates, wells_one_cluster_per_well, coordinates_one_cluster_per_well).
+
+    The first pair uses the new spatial-binning cluster assignment (US-F4,
+    current default); the second pair reproduces the original
+    one-cluster-per-well mapping (US-F2) for comparison.
+    """
     positions = _well_positions()
     perm = _perm_array()
+    cluster_of = _bin_cluster(positions, CELL_SIZE_M, CLUSTER_BIN_M)
 
     well_rows = []
-    coord_rows = []
+    well_rows_flat = []
+    xy_of: dict[str, tuple[float, float]] = {}
     for name, (i, j) in sorted(positions.items()):
         is_injector = name.startswith("INJECT")
         local_perm = _local_permeability(perm, i, j)
@@ -157,9 +209,10 @@ def build() -> tuple[pd.DataFrame, pd.DataFrame]:
             perm_ratio = min(1.0, max(0.0, local_perm / 5000.0))
             oil_rate = PRODUCER_OIL_RATE_CEILING_TPD * perm_ratio
             liq_rate = oil_rate * (1.0 + PRODUCER_WATER_CUT_ASSUMPTION)
-        well_rows.append({
+        x, y = (i - 0.5) * CELL_SIZE_M, (j - 0.5) * CELL_SIZE_M
+        xy_of[name] = (x, y)
+        base_row = {
             "name": name,
-            "cluster": name,
             "field": "egg_model",
             "layer": "egg",
             "well_type": "ГС",
@@ -167,28 +220,50 @@ def build() -> tuple[pd.DataFrame, pd.DataFrame]:
             "liq_rate": round(liq_rate, 4),
             "length": WELL_LENGTH_M,
             "init_entry_date": INIT_ENTRY_DATE,
-        })
-        coord_rows.append({
-            "cluster": name,
-            "x": (i - 0.5) * CELL_SIZE_M,
-            "y": (j - 0.5) * CELL_SIZE_M,
-        })
+        }
+        well_rows.append({**base_row, "cluster": cluster_of[name]})
+        well_rows_flat.append({**base_row, "cluster": name})
+
+    # New: cluster coordinates = centroid of member wells' (x, y).
+    members_by_cluster: dict[str, list[str]] = {}
+    for name, cid in cluster_of.items():
+        members_by_cluster.setdefault(cid, []).append(name)
+    coord_rows = []
+    for cid, members in sorted(members_by_cluster.items()):
+        cx = sum(xy_of[m][0] for m in members) / len(members)
+        cy = sum(xy_of[m][1] for m in members) / len(members)
+        coord_rows.append({"cluster": cid, "x": cx, "y": cy})
+
+    coord_rows_flat = [
+        {"cluster": name, "x": x, "y": y} for name, (x, y) in sorted(xy_of.items())
+    ]
 
     wells = pd.DataFrame(well_rows)
     coordinates = pd.DataFrame(coord_rows)
-    return wells, coordinates
+    wells_flat = pd.DataFrame(well_rows_flat)
+    coordinates_flat = pd.DataFrame(coord_rows_flat)
+    return wells, coordinates, wells_flat, coordinates_flat
 
 
 def main() -> int:
-    wells, coordinates = build()
+    wells, coordinates, wells_flat, coordinates_flat = build()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+
     wells_path = OUT_DIR / "wells.xlsx"
     coords_path = OUT_DIR / "coordinates.xlsx"
     wells.to_excel(wells_path, index=False)
     coordinates.to_excel(coords_path, index=False)
-    print(f"wells: {len(wells)} rows -> {wells_path}")
-    print(f"coordinates: {len(coordinates)} rows -> {coords_path}")
+    print(f"wells (spatially binned clusters, default): {len(wells)} rows -> {wells_path}")
+    print(f"coordinates: {len(coordinates)} rows ({coordinates['cluster'].nunique()} clusters) -> {coords_path}")
     print(wells.to_string(index=False))
+
+    flat_wells_path = OUT_DIR / "wells_one_cluster_per_well.xlsx"
+    flat_coords_path = OUT_DIR / "coordinates_one_cluster_per_well.xlsx"
+    wells_flat.to_excel(flat_wells_path, index=False)
+    coordinates_flat.to_excel(flat_coords_path, index=False)
+    print(f"wells (one cluster per well, US-F2 history): {len(wells_flat)} rows -> {flat_wells_path}")
+    print(f"coordinates (one cluster per well, US-F2 history): {len(coordinates_flat)} rows -> {flat_coords_path}")
+
     return 0
 
 

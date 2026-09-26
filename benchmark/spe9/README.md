@@ -354,11 +354,15 @@ consistent with the note in the no-bootstrap run above about SPE9 being an
 
 ---
 
-## Section B: real HyperActive pipeline with MaskedCDQN/bc39 (current, US-F2)
+## Section B: real HyperActive pipeline with MaskedCDQN/bc39 (current, US-F2 + US-F4)
 
 This section supersedes Section A above as the current benchmark for this
 dataset: it runs the same 26 real SPE9 wells through HyperActive-public's
 actual, deployed planner -- not the proxy evaluator described in Section A.
+It was originally written with a one-cluster-per-well mapping (US-F2); US-F4
+below replaces that mapping with real spatial-proximity clustering as the
+default and is the current, primary result -- the one-cluster-per-well
+numbers are kept as dated history further down.
 
 ### Real-pipeline adapter (`build_hyperactive_input.py`)
 
@@ -368,9 +372,12 @@ with the same shared parser (`benchmark/common/eclipse_parse.py`) as
 [`docs/data-format.md`](../../docs/data-format.md) instead:
 `benchmark/spe9/hyperactive_input/wells.xlsx` and `coordinates.xlsx`. Full
 mapping detail and disclosures are in `build_hyperactive_input.py`'s module
-docstring; in short:
+docstring; in short (see "Real spatial-proximity clustering (US-F4)" below
+for the current cluster mapping; this list uses the original US-F2
+one-cluster-per-well mapping, kept as history):
 
-* one cluster per well (no pad grouping in the archive);
+* one cluster per well (no pad grouping in the archive) -- **history,
+  superseded by US-F4 below**;
 * `well_type = "ГС"` for all 26 wells;
 * `x`/`y` from real (I, J) WELSPECS positions x the deck's real 300 ft
   (91.44 m) cell size; `length` from each well's real COMPDAT K1:K2
@@ -393,19 +400,26 @@ docstring; in short:
 injection-support concept, so INJE1 shows negative well NPV in the results
 below -- disclosed, not a bug.
 
-### Real pipeline run
+### Real pipeline run (US-F2 history: one-cluster-per-well mapping)
 
 ```bash
 python benchmark/spe9/build_hyperactive_input.py
 
 .venv_real/bin/hyperactive-plan \
-  --wells benchmark/spe9/hyperactive_input/wells.xlsx \
-  --coordinates benchmark/spe9/hyperactive_input/coordinates.xlsx \
+  --wells benchmark/spe9/hyperactive_input/wells_one_cluster_per_well.xlsx \
+  --coordinates benchmark/spe9/hyperactive_input/coordinates_one_cluster_per_well.xlsx \
   --model models/bc39 --start 2026-01-01 --horizon-years 20 \
   --drilling-months 12 --drilling-crews 2 --gtm-crews 1 \
   --episodes 10 --exploration 0.15 --no-tracking \
   --out benchmark/spe9/plan_bc39.csv
 ```
+
+(At the time this subsection was written, `wells.xlsx`/`coordinates.xlsx`
+themselves held the one-cluster-per-well mapping; US-F4 below repointed those
+default filenames at the new spatial-binning mapping and moved the original
+one-cluster-per-well output to the `_one_cluster_per_well` filenames shown
+above, so this command is now written against those filenames to remain
+reproducible.)
 
 One command runs both the real greedy `PlanBuilder` baseline and the real
 deployed `models/bc39` MaskedCDQN policy (10 stochastic rollouts, best kept).
@@ -428,6 +442,76 @@ mapping -- see the Egg Model README's Section B for the full explanation;
 the same effect applies here unchanged.
 
 Full RL schedule: [`plan_bc39.csv`](plan_bc39.csv).
+
+### Real spatial-proximity clustering (US-F4, current default)
+
+Same fix and same reasoning as the Egg Model (see that README's "Real
+spatial-proximity clustering (US-F4)" section for the full method
+writeup): `build_hyperactive_input.py` now groups SPE9's 26 wells into
+clusters using real spatial proximity from the deck's own (I, J) grid
+positions, via fixed-size spatial binning. SPE9's 25 producers happen to sit
+on a single connected diagonal chain across the grid (each well's nearest
+real neighbour is only 1.4-4.1 grid cells away, no natural gap to cut at),
+so nearest-neighbour/agglomerative (single-linkage) clustering was
+deliberately **not** used here: any single-linkage threshold above ~4.1
+cells would chain the *entire* producer set into one degenerate all-in-one
+cluster. Fixed-size binning avoids this because bins are bounded squares,
+not a walk along nearest-neighbour edges.
+
+Each well's (I, J) is quantized into a 700 m square bin (`n = round(700 /
+91.44) = 8` grid cells, `DX = DY = 300 ft = 91.44` m); wells sharing a bin
+become one cluster; a cluster's coordinate is the centroid of its member
+wells. This gives **7 clusters of size [2, 2, 2, 4, 4, 6, 6]** (mean 3.7
+wells/cluster) from the 26 wells -- no singleton cluster, no cluster holding
+more than 6/26 wells. 700 m was chosen after trying smaller bins that stayed
+close to one-per-well (300 m: 22 clusters, mostly singletons, mean 1.18;
+500 m: 16 clusters, mean 1.62), fixed *before* looking at any NPV outcome
+(see `build_hyperactive_input.py`'s module docstring for the full writeup).
+This mapping is now written to the default `wells.xlsx` /
+`coordinates.xlsx`; the original one-cluster-per-well mapping is preserved
+unchanged at `wells_one_cluster_per_well.xlsx` /
+`coordinates_one_cluster_per_well.xlsx` for reproducibility of the numbers
+in the subsection above.
+
+```bash
+python benchmark/spe9/build_hyperactive_input.py
+
+.venv_real/bin/hyperactive-plan \
+  --wells benchmark/spe9/hyperactive_input/wells.xlsx \
+  --coordinates benchmark/spe9/hyperactive_input/coordinates.xlsx \
+  --model models/bc39 --start 2026-01-01 --horizon-years 20 \
+  --drilling-months 12 --drilling-crews 2 --gtm-crews 1 \
+  --episodes 10 --exploration 0.15 --no-tracking \
+  --out benchmark/spe9/plan_bc39_v2.csv
+```
+
+**Real output (verbatim console output of the command above):**
+
+```
+wells: 26 valid, 0 rejected
+RL plan (bc39): 13 wells, NPV 47,324,417,883
+greedy plan: 16 wells, NPV 58,971,812,911 (RL vs greedy -19.75%)
+```
+
+**Wells scheduled: greedy 6/26 -> 16/26; bc39 6/26 -> 13/26.** A materially
+less degenerate result on well count, same direct effect as the Egg Model:
+most well-to-well moves now land within a cluster instead of paying the
+90-day inter-cluster floor on every move.
+
+**NPV, reported honestly:** with the new clustering, greedy beats bc39 by
+**-19.75%** (bc39: 47,324,417,883 vs. greedy: 58,971,812,911) -- unlike the
+Egg Model, bc39 does *not* come out ahead here. This is reported as-is: the
+700 m bin threshold was fixed by the nearest-neighbour/cluster-size
+reasoning above, before this command was run or its output looked at, and it
+was not revisited after seeing this result. Greedy also schedules more
+wells than bc39 here (16 vs. 13) as well as more NPV, unlike the Egg Model
+case where bc39 won on NPV with fewer wells -- SPE9's producers are close to
+homogeneous (identical mapped oil/liq rates across all 25 producers, see
+"Real pipeline run" above), so there is less for a learned policy to
+differentiate on here than on the Egg Model's mixed injector/producer,
+permeability-varying pool.
+
+Full RL schedule: [`plan_bc39_v2.csv`](plan_bc39_v2.csv).
 
 ### Exhaustive comparison
 

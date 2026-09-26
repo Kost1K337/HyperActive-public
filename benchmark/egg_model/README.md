@@ -396,12 +396,15 @@ in order to avoid tuning after seeing results.
 
 ---
 
-## Section B: real HyperActive pipeline with MaskedCDQN/bc39 (current, US-F2)
+## Section B: real HyperActive pipeline with MaskedCDQN/bc39 (current, US-F2 + US-F4)
 
 This section supersedes Section A above as the current benchmark for this
 dataset: it runs the same 12 real Egg Model wells through
 HyperActive-public's actual, deployed planner -- not the proxy evaluator
-described in Section A.
+described in Section A. It was originally written with a one-cluster-per-well
+mapping (US-F2); US-F4 below replaces that mapping with real spatial-proximity
+clustering as the default and is the current, primary result -- the
+one-cluster-per-well numbers are kept as dated history further down.
 
 ### Real-pipeline adapter (`build_hyperactive_input.py`)
 
@@ -415,9 +418,12 @@ instead: `benchmark/egg_model/hyperactive_input/wells.xlsx` and
 coordinate units, well length, oil/liquid rates) is documented in full,
 including which numbers are real deck values and which are proxies, in the
 module docstring of `build_hyperactive_input.py` itself -- read it before
-citing any number below. In short:
+citing any number below. In short (see "Real spatial-proximity clustering
+(US-F4)" below for the current cluster mapping; this list uses the original
+US-F2 one-cluster-per-well mapping, kept as history):
 
-* one cluster per well (no pad grouping exists in the archive);
+* one cluster per well (no pad grouping exists in the archive) -- **history,
+  superseded by US-F4 below**;
 * `well_type = "ГС"` for all 12 wells (no fracturing program in the deck);
 * `x`/`y` from real (I, J) WELSPECS positions x the deck's real 8 m cell
   size; `length` = 28 m, the deck's real 7-layer (K=1..7) x 4 m completion
@@ -439,7 +445,7 @@ producer-only sequencing planner is asked to also schedule injectors. It is
 disclosed here rather than silently excluding the 8 injectors from the
 dataset.
 
-### Real pipeline run
+### Real pipeline run (US-F2 history: one-cluster-per-well mapping)
 
 Environment: `python3 -m venv .venv_real && .venv_real/bin/pip install -e ".[dev]"`
 (repo root), `torch==2.7.1` / `stable-baselines3==2.7.1` per
@@ -449,13 +455,20 @@ Environment: `python3 -m venv .venv_real && .venv_real/bin/pip install -e ".[dev
 python benchmark/egg_model/build_hyperactive_input.py
 
 .venv_real/bin/hyperactive-plan \
-  --wells benchmark/egg_model/hyperactive_input/wells.xlsx \
-  --coordinates benchmark/egg_model/hyperactive_input/coordinates.xlsx \
+  --wells benchmark/egg_model/hyperactive_input/wells_one_cluster_per_well.xlsx \
+  --coordinates benchmark/egg_model/hyperactive_input/coordinates_one_cluster_per_well.xlsx \
   --model models/bc39 --start 2026-01-01 --horizon-years 20 \
   --drilling-months 12 --drilling-crews 2 --gtm-crews 1 \
   --episodes 10 --exploration 0.15 --no-tracking \
   --out benchmark/egg_model/plan_bc39.csv
 ```
+
+(At the time this subsection was written, `wells.xlsx`/`coordinates.xlsx`
+themselves held the one-cluster-per-well mapping; US-F4 below repointed those
+default filenames at the new spatial-binning mapping and moved the original
+one-cluster-per-well output to the `_one_cluster_per_well` filenames shown
+above, so this command is now written against those filenames to remain
+reproducible.)
 
 This single command runs BOTH the real greedy `PlanBuilder` baseline and the
 real deployed `models/bc39` MaskedCDQN policy (10 stochastic rollouts,
@@ -487,6 +500,78 @@ built for a multi-pad field; it is reported honestly rather than tuned away
 (e.g. by overriding `min_days_between_clusters`, which was not done).
 
 Full RL schedule: [`plan_bc39.csv`](plan_bc39.csv).
+
+### Real spatial-proximity clustering (US-F4, current default)
+
+The one-cluster-per-well mapping above meant `min_days_between_clusters =
+90` (a real, unmodified project convention for pad-to-pad rig moves) applied
+to *every* well-to-well move regardless of true grid distance -- Egg Model's
+12 wells sit tens to low-hundreds of metres apart, not kilometres, so this
+floor -- not distance, not well count, not capex -- was the binding
+constraint, and it bound identically for greedy and bc39, making the
+comparison real but uninformative.
+
+**Fix:** `build_hyperactive_input.py` now groups wells into clusters using
+real spatial proximity from the deck's own (I, J) grid positions, via
+fixed-size spatial binning: each well's (I, J) is quantized into a 250 m
+square bin (`n = round(250 / 8) = 31` grid cells, `DX = DY = 8` m); wells
+sharing a bin become one cluster; a cluster's coordinate is the centroid of
+its member wells. This gives **4 clusters of size [2, 3, 3, 4]** (mean 3.0
+wells/cluster) from the 12 wells. 250 m was chosen because it is the
+smallest threshold that groups every well with at least one other (all 12
+wells' real nearest-neighbour distance is >= 109 m / 13.6 grid cells --
+Egg Model is a wide-spaced 5-spot-style pattern, not a padded field) while
+staying well clear of merging everything into one cluster; smaller
+thresholds tried (150 m: 8 clusters, mean 1.5) were still close to
+one-per-well, and this threshold was fixed *before* looking at any NPV
+outcome (see `build_hyperactive_input.py`'s module docstring for the full
+method writeup, including why fixed-size binning was used instead of
+nearest-neighbour agglomerative clustering). This mapping is now written to
+the default `wells.xlsx` / `coordinates.xlsx`; the original
+one-cluster-per-well mapping is preserved unchanged at
+`wells_one_cluster_per_well.xlsx` / `coordinates_one_cluster_per_well.xlsx`
+for reproducibility of the numbers in the subsection above.
+
+```bash
+python benchmark/egg_model/build_hyperactive_input.py
+
+.venv_real/bin/hyperactive-plan \
+  --wells benchmark/egg_model/hyperactive_input/wells.xlsx \
+  --coordinates benchmark/egg_model/hyperactive_input/coordinates.xlsx \
+  --model models/bc39 --start 2026-01-01 --horizon-years 20 \
+  --drilling-months 12 --drilling-crews 2 --gtm-crews 1 \
+  --episodes 10 --exploration 0.15 --no-tracking \
+  --out benchmark/egg_model/plan_bc39_v2.csv
+```
+
+**Real output (verbatim console output of the command above):**
+
+```
+wells: 12 valid, 0 rejected
+RL plan (bc39): 9 wells, NPV 1,722,483,028
+greedy plan: 12 wells, NPV 1,529,277,304 (RL vs greedy +12.63%)
+```
+
+**Wells scheduled: greedy 6/12 -> 12/12 (all wells); bc39 6/12 -> 9/12.**
+The comparison is now materially less degenerate: greedy schedules every
+well in the pool, and bc39 schedules 9 of 12. This is the direct effect of
+most well-to-well moves now landing within a cluster (fast,
+`same_cluster_move_days = 1`) rather than paying the 90-day inter-cluster
+floor on every move.
+
+**NPV, reported honestly:** with the new clustering, bc39 beats greedy by
+**+12.63%** (1,722,483,028 vs. 1,529,277,304) -- the reverse of the US-F2
+result above (bc39 was -1.43% under one-cluster-per-well). This is a genuine
+outcome of the real run, not a tuned one: the 250 m bin threshold was fixed
+by the nearest-neighbour/cluster-size reasoning above, before this command
+was run or its output looked at. Note also that bc39 schedules *fewer*
+wells than greedy here (9 vs. 12) yet still wins on NPV -- greedy's
+value-density-first heuristic fills the full 12-well pool but pays more
+total crew-move and drilling cost doing so within the horizon, while bc39's
+policy is selective; this is a genuine tradeoff the real run surfaces, not
+an inconsistency.
+
+Full RL schedule: [`plan_bc39_v2.csv`](plan_bc39_v2.csv).
 
 ### Exhaustive comparison
 
