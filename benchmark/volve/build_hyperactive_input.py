@@ -81,11 +81,15 @@ Egg Model/SPE9/SPE10 adapters):
   ``bysarmad`` mirror CSV -- unlike the Egg Model/SPE9/SPE10 adapters
   (which only had a completion-interval proxy), Volve's source table gives
   each well's real total wellbore length directly.
-* ``init_entry_date``: the REAL ``Completed date`` from the mirror CSV
-  (when each well was finished and could start producing/injecting) --
-  unlike the other three adapters (which all used one assumed simultaneous
-  readiness date), Volve's real per-well completion dates are used,
-  parsed from ``DD.MM.YYYY`` format.
+* ``init_entry_date``: ``2026-01-01`` (the planning start) for every well,
+  exactly like the Egg Model/SPE9/SPE10/Norne/Drogon adapters. CORRECTED in
+  the baseline-fairness pass: the first version used the REAL historical
+  ``Completed date`` (2007-2014) from the mirror CSV. With every run starting
+  on ``--start 2026-01-01`` that put ``ready_in_days`` near -6110 days for
+  every well, clipped at the VecNormalize +/-10 bound on 100% of rows, and a
+  historical completion date is not the readiness of a candidate in a
+  2026-forward plan. The real dates remain in the raw CSV; see README.md
+  "Baseline fairness correction".
 * ``oil_rate`` / ``liq_rate`` (t/day): **NO measured production/injection
   RATE data was available within this pass's time-boxed acquisition** (the
   accessible sources above give identity, position, depth and dates, not
@@ -103,12 +107,12 @@ Egg Model/SPE9/SPE10 adapters):
   or static Volve quantity; they exist only to exercise the pipeline
   mechanics honestly-labeled as a placeholder, not a measurement.
 
-PROXY OBJECTIVE / SCHEMA-FIT DISCLOSURE: position, depth (length) and
-readiness dates are all real, well-specific, sourced data for the 12
-included wells. Rates are an undifferentiated placeholder (see above) --
+PROXY OBJECTIVE / SCHEMA-FIT DISCLOSURE: position and depth (length) are
+real, well-specific, sourced data for the 12 included wells; readiness is
+the common planning start (see the correction above). Rates are an undifferentiated placeholder (see above) --
 this means every producer in this benchmark has IDENTICAL modelled
 economics, so any greedy/RL choice among producers is driven entirely by
-readiness-date/crew-scheduling structure, not by any real well-to-well
+depth/crew-scheduling structure, not by any real well-to-well
 value difference; this is a materially weaker benchmark than Egg Model/
 SPE9/SPE10 on that specific axis, disclosed rather than dressed up. The
 injectors' liquid volume is, as with every other adapter here, a pure lift
@@ -117,7 +121,6 @@ cost with no oil revenue in HyperActive's producer-only economics.
 from __future__ import annotations
 
 import csv
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -131,6 +134,7 @@ COORDS_CSV = RAW_ROOT / "volve_wells_coords_sodir.csv"
 PRODUCER_OIL_RATE_TPD = 40.0  # PLACEHOLDER, not measured -- see module docstring
 PRODUCER_WATER_CUT_ASSUMPTION = 0.05  # assumed, not measured (same as other adapters)
 INJECTOR_LIQ_RATE_TPD = 150.0  # PLACEHOLDER, not measured -- see module docstring
+INIT_ENTRY_DATE = "2026-01-01"  # planning start, all wells ready (see module docstring)
 
 CLUSTER_BIN_M = 50.0  # spatial-binning threshold, see module docstring (US-F7)
 
@@ -139,10 +143,6 @@ INCLUDED_PURPOSES = {"Production", "Injection"}
 
 def _slug(name: str) -> str:
     return name.strip()
-
-
-def _parse_date(value: str) -> str:
-    return datetime.strptime(value.strip(), "%d.%m.%Y").strftime("%Y-%m-%d")
 
 
 def _bin_cluster(positions: dict[str, tuple[float, float]], bin_m: float) -> dict[str, str]:
@@ -213,7 +213,6 @@ def build() -> tuple[pd.DataFrame, pd.DataFrame]:
         purpose = row["Purpose"].strip()
         is_injector = purpose == "Injection"
         md_m = float(row["MD (m)"])
-        entry_date = _parse_date(row["Completed date"])
         if is_injector:
             oil_rate = 0.0
             liq_rate = INJECTOR_LIQ_RATE_TPD
@@ -230,7 +229,7 @@ def build() -> tuple[pd.DataFrame, pd.DataFrame]:
                 "oil_rate": round(oil_rate, 4),
                 "liq_rate": round(liq_rate, 4),
                 "length": round(md_m, 4),
-                "init_entry_date": entry_date,
+                "init_entry_date": INIT_ENTRY_DATE,
             }
         )
 

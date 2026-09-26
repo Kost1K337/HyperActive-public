@@ -209,3 +209,63 @@ Full RL schedule: [`plan_bc39.csv`](plan_bc39.csv).
 See [`benchmark/results_real_pipeline.csv`](../results_real_pipeline.csv)
 for the combined results table across all benchmarks (Egg Model, SPE9,
 SPE10, Volve, ...).
+
+## Baseline fairness correction (bug-fix pass)
+
+The numbers in "Real pipeline run" above are HISTORICAL (US-F7) and are kept
+as recorded. Two problems were found afterwards and corrected; the corrected
+numbers below supersede them. Overview of the whole pass:
+[`../BASELINE_FAIRNESS_CORRECTION.md`](../BASELINE_FAIRNESS_CORRECTION.md).
+
+**1. `init_entry_date` predated the planning window (Volve only).** The
+adapter used each well's real historical `Completed date` (2007-2014) as
+`init_entry_date`, while every run starts on `--start 2026-01-01`. That put
+the `ready_in_days` feature near -6110 days for every candidate; after
+bc39's VecNormalize it hit the +/-10 clip bound on **100%** of candidate
+rows (measured on a row-0 rollout: 68 rows, 68 clipped on `ready_in_days`).
+A historical completion date is not the readiness of a candidate in a
+2026-forward plan. Fix: `init_entry_date = 2026-01-01` for all 12 wells,
+the same convention as Egg Model/SPE9/SPE10/Norne/Drogon
+(`INIT_ENTRY_DATE` in `build_hyperactive_input.py`). The real completion
+dates remain in `raw/volve_wells_bysarmad_mirror.csv`. After the fix, the
+share of rows with any clipped feature is **5.9%** (`length` 6%, `capex`
+3%). Consequence for the text above: the "0.76% gap from the injectors'
+differing readiness dates" explanation no longer applies -- readiness is
+now identical for all wells.
+
+**2. Greedy ranking rule mismatch (all benchmarks).** `PlanBuilder` ranks
+candidates by `NPV - drill_team_penalty`; `PlanEnv`, which defines the
+candidate set bc39 acts on, ranks by NPV alone. The primary baseline is now
+the NPV-only greedy (`--greedy-penalty off`), which is exactly "always take
+the environment's best-ranked candidate"; the penalised greedy is kept as a
+secondary baseline. On Volve (one cluster) both rules pick the same plan.
+
+Command (same parameters as above, both greedy variants):
+
+```bash
+python benchmark/volve/build_hyperactive_input.py
+.venv_real/bin/hyperactive-plan \
+  --wells benchmark/volve/hyperactive_input/wells.xlsx \
+  --coordinates benchmark/volve/hyperactive_input/coordinates.xlsx \
+  --model models/bc39 --start 2026-01-01 --horizon-years 20 \
+  --drilling-months 12 --drilling-crews 2 --gtm-crews 1 \
+  --episodes 10 --exploration 0.15 --no-tracking --greedy-penalty both \
+  --out benchmark/volve/plan_bc39.csv
+```
+
+```
+wells: 12 valid, 0 rejected
+RL plan (bc39): 12 wells, NPV 6,423,330,891
+greedy plan (NPV only): 12 wells, NPV 6,429,779,953 (RL vs greedy -0.10%)
+greedy plan (NPV - drill_team_penalty): 12 wells, NPV 6,429,779,953 (RL vs greedy -0.10%)
+```
+
+| | old (US-F7) | corrected |
+|---|---:|---:|
+| bc39 NPV | 6,380,791,713 | 6,423,330,891 |
+| greedy, NPV only (primary) | -- | 6,429,779,953 |
+| greedy, NPV - penalty (secondary) | 6,429,779,953 | 6,429,779,953 |
+| bc39 vs primary greedy | -- | **-0.10%** |
+| bc39 vs penalised greedy | -0.76% | -0.10% |
+
+Greedy still wins, by a smaller margin. `plan_bc39.csv` is the corrected run.
