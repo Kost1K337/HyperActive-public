@@ -8,3 +8,5 @@ egg_model,greedy,12,12,1529277304,,"CURRENT (US-F4): spatial-binning cluster map
 egg_model,bc39_maskedcdqn,9,12,1722483028,12.63,"CURRENT (US-F4): spatial-binning cluster mapping (250 m bins, 4 clusters), real hyperactive-plan run, 10 episodes exploration 0.15"
 spe9,greedy,16,26,58971812911,,"CURRENT (US-F4): spatial-binning cluster mapping (700 m bins, 7 clusters), real hyperactive-plan run (see spe9/README.md Section B)"
 spe9,bc39_maskedcdqn,13,26,47324417883,-19.75,"CURRENT (US-F4): spatial-binning cluster mapping (700 m bins, 7 clusters), real hyperactive-plan run, 10 episodes exploration 0.15"
+spe10,greedy,5,5,1764158272,,"CURRENT (US-F6): 5-well pool (1 injector + 4 producers), real spatial-proximity clustering from the start (150 m bins, 5 singleton clusters -- real nearest-neighbour spacing is >= 360 m, so no merging occurs), real hyperactive-plan run (see spe10/README.md)"
+spe10,bc39_maskedcdqn,5,5,1764158272,0.00,"CURRENT (US-F6): 5-well pool, same clustering, real hyperactive-plan run, 10 episodes exploration 0.15 -- identical plan/NPV to greedy (no resource contention with 5 wells/2 crews)"
