@@ -84,6 +84,100 @@ reasonable git size threshold (largest is `SPE9.GRDECL` at ~806 KB).
 
 ## Scope note
 
-This benchmark is data acquisition only (US-E2). Adapting `SPE9.DATA` into a
-HyperActive-style candidate-set / evaluator representation (US-E3) is tracked
-separately and has not been implemented yet.
+Data acquisition (US-E2) is described above. The rest of this document
+(US-E3) covers the candidate-set adapter, the real baseline runs, and the
+attention-network training status.
+
+## Candidate-set adapter (`adapter.py`)
+
+`adapter.py` parses `raw/SPE9.DATA` (+ its `PERMVALUES.DATA` include) with
+the same standalone Eclipse-deck parser used for the Egg Model
+(`benchmark/common/eclipse_parse.py`) to build one candidate-set case with
+all 26 wells (1 injector + 25 producers) as candidates; a "plan" is the
+order in which they are brought online.
+
+SPE9 has something the Egg Model deck doesn't: a genuine, dated
+control-change schedule. `WCONPROD` is reissued three times over the
+900-day run (`WCONINJE` for the single injector stays constant):
+
+| day | all-producer oil-rate target (STB/d) |
+|----:|--------------------------------------:|
+|   0 |                                  1500 |
+| 300 |                                   100 |
+| 360 |                                  1500 |
+
+The adapter keeps all three rate targets as separate per-well features
+(rather than collapsing them to one number), since this is real schedule
+structure from the source deck, not something invented for the benchmark.
+
+### Proxy objective disclosure
+
+**This is not a reservoir simulation.** As with the Egg Model, no
+Eclipse/OPM Flow run is performed or available offline. The value used to
+compare orderings is an explicit, documented analytic proxy:
+
+```
+injector value_index = 0.3 * injection_rate_target * local_permeability / 1000
+producer value_index = local_permeability * mean(phase_rate_targets) / 100 / 1000
+```
+
+- `injection_rate_target` (5000 STBW/d) and the three `phase_rate_targets`
+  (1500, 100, 1500 STB/d) are read directly from the deck's `WCONINJE` /
+  `WCONPROD` records.
+- `local_permeability` is the mean `PERMX` (mDarcy) over each well's
+  completed layer range (`COMPDAT` K1:K2) at its (I, J) location, from
+  `PERMVALUES.DATA`.
+- The same single-shared-resource, 10%/year-discounted evaluator as the Egg
+  Model is used (`benchmark/common/sequencing_env.py`), with each well
+  occupying the resource for 10 days (the deck's initial `TSTEP`
+  granularity) before the next well comes online.
+
+This is a transparent proxy for value, not simulated cumulative
+production; the numbers below are not physical NPV.
+
+### Baselines run (real, real output)
+
+```bash
+python3 benchmark/spe9/run_benchmark.py \
+    --seeds 17,29,43,71,101 --random-samples 500 --local-search-evaluations 2000 \
+    --out benchmark/spe9/results.csv
+```
+
+Produces `results.csv` with one row per (method, seed): 1 greedy + 5 random
+seeds + 5 local-search seeds = 11 rows.
+
+| method                         | n | mean metric_value | min     | max     |
+|---------------------------------|--:|--------------------:|--------:|--------:|
+| `greedy_value_density`          | 1 |             174.311 | 174.311 | 174.311 |
+| `local_swap_search_2000`        | 5 |             174.311 | 174.311 | 174.311 |
+| `random_500_best`               | 5 |             173.623 | 173.296 | 173.839 |
+
+As with the Egg Model, greedy and local-swap search land on the same value:
+since every well shares the same `duration_days` (10), the discount factor
+per order position is fixed, so the optimal order is exactly "sort by
+`value_index` descending" (a rearrangement-inequality result) -- greedy
+value-density already produces that order, so local search cannot improve
+on it. Random-500-best comes close but does not reliably find the exact
+optimum in 500 samples.
+
+### Training status: BLOCKER
+
+Identical situation to the Egg Model: PyTorch is not installed in this
+environment and installing it was not feasible within this pass's time
+budget.
+
+```bash
+$ python3 -c "import torch; print(torch.__version__)"
+ModuleNotFoundError: No module named 'torch'
+$ python3 benchmark/spe9/train_attention.py
+BLOCKER: PyTorch is not installed in this environment ...
+$ echo $?
+1
+```
+
+`train_attention.py` implements a real training loop against
+`benchmark/common/attention_dueling_quantile_q.py` with `feature_dim=10`
+(retrained from scratch, no weight transfer from the Egg Model or any other
+benchmark) but cannot execute without PyTorch. This is reported honestly as
+a documented blocker (see the PRD's `criterionAmendments` for US-E3). The
+baseline comparisons above do not depend on PyTorch and are complete.

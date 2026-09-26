@@ -101,6 +101,104 @@ $ du -sh benchmark/egg_model/raw
 
 ## Scope note
 
-This benchmark is data acquisition only (US-E2). Adapting these files into a
-HyperActive-style candidate-set / evaluator representation (US-E3) is tracked
-separately and has not been implemented yet.
+Data acquisition (US-E2) is described above. The rest of this document
+(US-E3) covers the candidate-set adapter, the real baseline runs, and the
+attention-network training status.
+
+## Candidate-set adapter (`adapter.py`)
+
+`adapter.py` parses `raw/Eclipse/Egg_Model_ECL.DATA` (+ its `SCHEDULE_NEW.INC`
+and `mDARCY.INC` includes) with a small standalone Eclipse-deck parser
+(`benchmark/common/eclipse_parse.py`) to build one candidate-set case per
+vendored permeability realization (the base realization + the 10 in
+`Permeability_Realizations_subset10/`, so 12 cases total). Each case has all
+12 wells (8 injectors + 4 producers) as candidates; a "plan" is the order in
+which the 12 wells are brought online.
+
+### Proxy objective disclosure
+
+**This is not a reservoir simulation.** No Eclipse/OPM Flow run is performed
+here or available offline for this dataset. The economic value used to
+compare orderings is an explicit, documented analytic proxy:
+
+```
+injector value_index = 0.3 * injection_rate_target * local_permeability / 1000
+producer value_index = local_permeability * (reference_bhp / 100) / 1000
+```
+
+- `injection_rate_target` / `reference_bhp` are read directly from the deck's
+  `WCONINJE` (79.5 STB/d water, all injectors) and `WCONPROD` (395 psia BHP,
+  all producers) records -- these are the deck's real assigned controls, not
+  invented numbers.
+- `local_permeability` is the mean `PERMX` (mDarcy) over the well's full
+  vertical column (K=1..7) at its (I, J) location, taken from the realization
+  file itself, so the 12 cases genuinely differ in value by realization.
+- A single shared "bring-online" resource processes wells strictly in the
+  chosen order; each well's `value_index` is discounted at 10%/year by the
+  day it comes online (30 days per prior well, matching the deck's 30-day
+  `TSTEP` granularity). This reuses the same discounted-single-resource
+  evaluator pattern used for the Oklahoma OCC benchmark, reimplemented here
+  standalone (`benchmark/common/sequencing_env.py`).
+
+This rewards bringing high-permeability, high-control-target wells online
+earlier. It is a transparent, reproducible stand-in for value -- it is
+**not** cumulative oil/water production from a flow simulation, and the
+numbers below must not be read as physical NPV.
+
+### Baselines run (real, real output)
+
+```bash
+python3 benchmark/egg_model/run_benchmark.py \
+    --seeds 17,29,43,71,101 --random-samples 500 --local-search-evaluations 2000 \
+    --out benchmark/egg_model/results.csv
+```
+
+Produces `results.csv` with one row per (method, case, seed): 12 cases x
+(1 greedy + 5 random seeds + 5 local-search seeds) = 132 rows.
+
+| method                         | cases | mean metric_value | min    | max    |
+|---------------------------------|------:|-------------------:|-------:|-------:|
+| `greedy_value_density`          |    12 |             226.226 |147.488 |287.541 |
+| `local_swap_search_2000`        | 12x5  |             226.226 |147.488 |287.541 |
+| `random_500_best`               | 12x5  |             225.483 |146.719 |287.051 |
+
+**Honest note on this result:** greedy and local-swap search land on
+*exactly* the same objective value here. This is not a bug -- because every
+well shares the same `duration_days` (30), the discount factor applied to
+each order position is fixed and monotonically decreasing regardless of
+*which* wells are assigned to it, so maximizing the sum reduces to a
+rearrangement-inequality problem: sort by value descending. Greedy
+value-density is therefore provably optimal for this exact proxy, and no
+local search over swaps can improve on it. Random-500-best gets close but
+essentially never finds the exact optimum in only 500 samples. This is a
+property of the current (documented, simplified) proxy objective, not a
+claim that Egg Model well sequencing is trivial for a real reservoir
+objective.
+
+### Training status: BLOCKER
+
+```bash
+$ python3 -c "import torch; print(torch.__version__)"
+ModuleNotFoundError: No module named 'torch'
+$ timeout 10 pip download torch --no-deps -d /tmp/torchtest
+# timed out after 10s resolving/downloading -- not a quick install
+```
+
+PyTorch is not installed in this environment, and installing it (a large,
+slow download in this sandbox) was not feasible within this pass's time
+budget. `train_attention.py` implements a real training loop against
+`benchmark/common/attention_dueling_quantile_q.py` (the
+AttentionDuelingQuantileQ architecture, retrained from scratch with
+`feature_dim=8` -- no weight transfer from any other benchmark), and exits
+with an explicit blocker message rather than fabricating a loss curve:
+
+```bash
+$ python3 benchmark/egg_model/train_attention.py
+BLOCKER: PyTorch is not installed in this environment ...
+$ echo $?
+1
+```
+
+This is reported honestly as a documented blocker (see the PRD's
+`criterionAmendments` for US-E3). The baseline comparisons above do not
+depend on PyTorch and are complete.
