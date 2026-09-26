@@ -5,7 +5,11 @@ For every grid cell (fund x crews x work window) two plans are built:
 
 * ``rl`` - the policy, ``--episodes`` rollouts with exploration ``--exploration``
   (episode ``k`` is seeded with ``k``), the plan with the highest NPV is kept;
-* ``greedy`` - one deterministic greedy pass ranked by ``NPV - drill_team_penalty``;
+* ``greedy`` - one deterministic greedy pass ranked by ``NPV - drill_team_penalty``
+  (with ``--greedy-matched-budget``: the best of ``--episodes`` greedy passes,
+  each taking a random candidate among the policy's action window with
+  probability ``--exploration``, episode ``k`` seeded with ``k`` - the same
+  search budget as the policy; the same applies to ``greedy_nopenalty``);
 * ``greedy_nopenalty`` - the same pass ranked by NPV alone, the rule ``PlanEnv``
   ranks the policy's candidates by (``uplift_nopenalty_percent``).
 
@@ -89,6 +93,7 @@ class Config:
     planning_months: int
     episodes: int
     exploration: float
+    greedy_matched_budget: bool
     economics: dict[str, Any]
     readiness_hour: Optional[int]
     days_per_year: float
@@ -210,19 +215,31 @@ def run_cell(fund: Fund, drilling: int, gtm: int, months: int, cfg: Config) -> d
     row["rl_plan_metrics"] = plan_metrics(rl_plan, window, drilling, gtm)
     row["rl_episode_npvs"] = stats["npvs"]
 
+    def greedy(use_penalty: bool):
+        # With --greedy-matched-budget the greedy gets the policy's search
+        # budget (same episodes, seeds, exploration and action window);
+        # otherwise it is one deterministic pass.
+        return PlanBuilder(
+            start=start, end=plan_end, end_jobs=jobs_end,
+            cost_function=make_npv(start, cfg.economics),
+            production_profile=ArpsDeclineProductionProfile(),
+            use_drill_team_penalty=use_penalty,
+        ).compile_best_of(
+            wells=wells,
+            make_manager=lambda: TeamManager(team_pool=make_team_pool(drilling, gtm),
+                                             movement=movement),
+            risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+            episodes=cfg.episodes if cfg.greedy_matched_budget else 1,
+            exploration=cfg.exploration if cfg.greedy_matched_budget else 0.0,
+            window=bundle.n_actions,
+        )
+
     began = time.perf_counter()
-    greedy_plan = PlanBuilder(
-        start=start, end=plan_end, end_jobs=jobs_end,
-        cost_function=make_npv(start, cfg.economics),
-        production_profile=ArpsDeclineProductionProfile(),
-    ).compile(
-        wells=copy.deepcopy(wells),
-        manager=TeamManager(team_pool=make_team_pool(drilling, gtm), movement=movement),
-        risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
-    )
+    greedy_plan, greedy_stats = greedy(True)
     row.update({
         "greedy_wells": len(greedy_plan.well_plans), "greedy_npv": greedy_plan.total_profit(),
-        "greedy_oil": greedy_plan.total_oil(),
+        "greedy_oil": greedy_plan.total_oil(), "greedy_episodes": greedy_stats["episodes"],
+        "greedy_selected_episode": greedy_stats["selected_episode"],
         "greedy_seconds": round(time.perf_counter() - began, 1),
     })
     row["greedy_plan_metrics"] = plan_metrics(greedy_plan, window, drilling, gtm)
@@ -233,18 +250,10 @@ def run_cell(fund: Fund, drilling: int, gtm: int, months: int, cfg: Config) -> d
     # The same greedy pass ranked by NPV alone: PlanEnv orders the policy's
     # candidates by NPV without drill_team_penalty, so this is the baseline on
     # the policy's own ranking rule. The penalised pass above stays as is.
-    greedy_plan = PlanBuilder(
-        start=start, end=plan_end, end_jobs=jobs_end,
-        cost_function=make_npv(start, cfg.economics),
-        production_profile=ArpsDeclineProductionProfile(),
-        use_drill_team_penalty=False,
-    ).compile(
-        wells=copy.deepcopy(wells),
-        manager=TeamManager(team_pool=make_team_pool(drilling, gtm), movement=movement),
-        risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
-    )
+    greedy_plan, greedy_stats = greedy(False)
     row.update({"greedy_nopenalty_wells": len(greedy_plan.well_plans),
-                "greedy_nopenalty_npv": greedy_plan.total_profit()})
+                "greedy_nopenalty_npv": greedy_plan.total_profit(),
+                "greedy_nopenalty_selected_episode": greedy_stats["selected_episode"]})
     if row["greedy_nopenalty_npv"] > 0:
         row["uplift_nopenalty_percent"] = round(
             (row["rl_npv"] / row["greedy_nopenalty_npv"] - 1.0) * 100.0, 2)
@@ -323,6 +332,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--planning-months", type=int, default=240, help="economic horizon, months")
     p.add_argument("--episodes", type=int, default=10, help=f"RL rollouts per cell, 1..{MAX_EPISODES}")
     p.add_argument("--exploration", type=float, default=0.15, help="probability of a random valid action")
+    p.add_argument("--greedy-matched-budget", action="store_true",
+                   help="give both greedy baselines the policy's search budget: best of --episodes "
+                        "passes at --exploration over the policy's action window "
+                        "(default: one deterministic greedy pass)")
     p.add_argument("--start-date", default=None, help="one start date for all funds, YYYY-MM-DD")
     p.add_argument("--settings", type=Path, default=None,
                    help="JSON overriding the project settings: economics, readiness_hour, "
@@ -352,7 +365,8 @@ def main() -> int:
     economics = settings.economics
     start_date = datetime.strptime(args.start_date, "%Y-%m-%d") if args.start_date else None
     cfg = Config(model_dir=str(args.model), planning_months=args.planning_months,
-                 episodes=args.episodes, exploration=args.exploration, economics=economics,
+                 episodes=args.episodes, exploration=args.exploration,
+                 greedy_matched_budget=args.greedy_matched_budget, economics=economics,
                  readiness_hour=settings.readiness_hour, days_per_year=settings.days_per_year)
 
     found, problems = discover_funds(args.cases.resolve(), start_date)
@@ -385,7 +399,9 @@ def main() -> int:
         ("crews", ",".join(f"{d}x{g}" for d, g in crews)),
         ("economic horizon, months", args.planning_months),
         ("rl episodes", args.episodes), ("exploration", args.exploration),
-        ("profile", "arps"), ("baseline", "greedy, one deterministic pass"),
+        ("profile", "arps"),
+        ("baseline", f"greedy, best of {args.episodes} passes at exploration {args.exploration}"
+                     if args.greedy_matched_budget else "greedy, one deterministic pass"),
         ("economics", json.dumps(economics, ensure_ascii=False)),
         ("readiness hour", "table timestamp" if cfg.readiness_hour is None else cfg.readiness_hour),
         ("days per year", cfg.days_per_year),
@@ -414,7 +430,8 @@ def _run_grid(args, cfg, grid, rows, out, parameters, tracker, suite, model_name
     tracker.log_environment()
     tracker.log_params({"model": model_name, "suite": suite, "cases": str(args.cases),
                         "planning_months": args.planning_months, "episodes": args.episodes,
-                        "exploration": args.exploration, "cells": len(grid),
+                        "exploration": args.exploration,
+                        "greedy_matched_budget": args.greedy_matched_budget, "cells": len(grid),
                         "economics": cfg.economics, "readiness_hour": cfg.readiness_hour,
                         "days_per_year": cfg.days_per_year})
     tracker.log_dict(cfg.economics, "economics.json")

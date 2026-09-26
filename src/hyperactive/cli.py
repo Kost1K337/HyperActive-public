@@ -81,6 +81,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="greedy ranking key: 'on' = NPV - drill_team_penalty (default), "
                         "'off' = NPV only, the key PlanEnv ranks the policy's candidates by; "
                         "'both' runs and reports the two baselines")
+    p.add_argument("--greedy-matched-budget", action="store_true",
+                   help="give the greedy baseline the policy's search budget: best of --episodes "
+                        "greedy passes, each taking a random candidate among the policy's action "
+                        "window with probability --exploration (default: one deterministic pass)")
     p.add_argument("--out", default=None, help="write the RL schedule to this CSV")
     p.add_argument("--experiment", default="hyperactive-plan", help="MLflow experiment name")
     p.add_argument("--tracking-uri", default=None,
@@ -135,7 +139,8 @@ def _plan(args: argparse.Namespace, tracker: RunTracker) -> int:
     plan, stats = plan_with_policy(env, bundle, episodes=args.episodes, exploration=args.exploration)
     rl_npv = plan.total_profit()
     print(f"wells: {len(wells)} valid, {rejected} rejected")
-    print(f"RL plan ({bundle.manifest.get('name', bundle.directory.name)}): "
+    print(f"RL plan ({bundle.manifest.get('name', bundle.directory.name)}, best of "
+          f"{stats['episodes']} at exploration {args.exploration}): "
           f"{len(plan.well_plans)} wells, NPV {rl_npv:,.0f}")
     tracker.log_metrics({"rejected_wells": rejected, "wells_total": len(wells),
                          "rl_npv": rl_npv, "rl_wells": len(plan.well_plans),
@@ -151,21 +156,27 @@ def _plan(args: argparse.Namespace, tracker: RunTracker) -> int:
             # the NPV-only ranking, the one PlanEnv uses, gets a "_nopenalty" suffix.
             suffix = "" if use_penalty else "_nopenalty"
             label = "NPV - drill_team_penalty" if use_penalty else "NPV only"
-            greedy_plan = PlanBuilder(
+            matched = args.greedy_matched_budget
+            greedy_plan, greedy_stats = PlanBuilder(
                 start=start, end=end, end_jobs=end_jobs,
                 cost_function=make_npv(start), production_profile=default_profile(),
                 constraints=oil_constraints(args.oil_cap),
                 use_drill_team_penalty=use_penalty,
                 max_commissioning_days=args.max_commissioning_days,
-            ).compile(
-                wells=deepcopy(wells),
-                manager=TeamManager(team_pool=make_team_pool(args.drilling_crews, args.gtm_crews),
-                                    movement=movement),
+            ).compile_best_of(
+                wells=wells,
+                make_manager=lambda: TeamManager(
+                    team_pool=make_team_pool(args.drilling_crews, args.gtm_crews), movement=movement),
                 risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+                episodes=args.episodes if matched else 1,
+                exploration=args.exploration if matched else 0.0,
+                window=bundle.n_actions,
             )
             greedy_npv = greedy_plan.total_profit()
             uplift = (rl_npv / greedy_npv - 1.0) * 100.0 if greedy_npv > 0 else float("nan")
-            print(f"greedy plan ({label}): {len(greedy_plan.well_plans)} wells, "
+            budget = (f", best of {greedy_stats['episodes']} at exploration {args.exploration}"
+                      if matched else "")
+            print(f"greedy plan ({label}{budget}): {len(greedy_plan.well_plans)} wells, "
                   f"NPV {greedy_npv:,.0f} (RL vs greedy {uplift:+.2f}%)")
             tracker.log_metrics({f"greedy{suffix}_npv": greedy_npv,
                                  f"greedy{suffix}_wells": len(greedy_plan.well_plans),

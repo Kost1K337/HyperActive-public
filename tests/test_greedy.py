@@ -150,3 +150,69 @@ class TestGreedySelection:
         # Despite dependent's far higher NPV, blocker (which unblocks it) must
         # be placed first.
         assert [c.well.name for c in plan.well_plans] == ["blocker", "dependent"]
+
+
+class TestGreedySearchBudget:
+    """``compile_best_of`` gives the greedy baseline the policy's search budget:
+    best of N passes, each taking a random candidate with probability p."""
+
+    @staticmethod
+    def _run(wells, npv, movement, make_team_pool, linear_profile, **kwargs):
+        builder = PlanBuilder(start=START, end=END, cost_function=npv,
+                              production_profile=linear_profile)
+        return builder.compile_best_of(
+            wells=wells,
+            make_manager=lambda: TeamManager(team_pool=make_team_pool(1, 1), movement=movement),
+            risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+            **kwargs,
+        )
+
+    @staticmethod
+    def _wells(make_well):
+        return [make_well(f"w{i}", cluster=f"C{i % 3}", oil_rate=10.0 + 7.0 * i)
+                for i in range(6)]
+
+    def test_zero_budget_is_the_deterministic_pass(self, npv, movement, make_team_pool,
+                                                   linear_profile, make_well):
+        wells = self._wells(make_well)
+        plan, stats = self._run(wells, npv, movement, make_team_pool, linear_profile)
+        reference = PlanBuilder(start=START, end=END, cost_function=npv,
+                                production_profile=linear_profile).compile(
+            wells=deepcopy(wells),
+            manager=TeamManager(team_pool=make_team_pool(1, 1), movement=movement),
+            risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+        )
+        assert [c.well.name for c in plan.well_plans] == [c.well.name for c in reference.well_plans]
+        assert stats["episodes"] == 1
+
+    def test_full_exploration_with_window_one_is_still_greedy(self, npv, movement,
+                                                              make_team_pool, linear_profile,
+                                                              make_well):
+        """A random pick among the single best-ranked candidate is the best one."""
+        wells = self._wells(make_well)
+        det, _ = self._run(wells, npv, movement, make_team_pool, linear_profile)
+        rnd, _ = self._run(wells, npv, movement, make_team_pool, linear_profile,
+                           episodes=3, exploration=1.0, window=1)
+        assert [c.well.name for c in rnd.well_plans] == [c.well.name for c in det.well_plans]
+
+    def test_exploration_is_seeded_and_best_npv_is_kept(self, npv, movement, make_team_pool,
+                                                        linear_profile, make_well):
+        wells = self._wells(make_well)
+        kwargs = dict(episodes=5, exploration=0.5, window=4)
+        plan_a, stats_a = self._run(wells, npv, movement, make_team_pool, linear_profile, **kwargs)
+        plan_b, stats_b = self._run(wells, npv, movement, make_team_pool, linear_profile, **kwargs)
+        assert stats_a["npvs"] == stats_b["npvs"]
+        assert [c.well.name for c in plan_a.well_plans] == [c.well.name for c in plan_b.well_plans]
+        assert stats_a["episodes"] == 5
+        assert plan_a.total_profit() == max(stats_a["npvs"])
+        # Exploration must actually change at least one pass's order.
+        orders = set()
+        for seed in range(5):
+            builder = PlanBuilder(start=START, end=END, cost_function=npv,
+                                  production_profile=linear_profile)
+            p = builder.compile(wells=deepcopy(wells),
+                                manager=TeamManager(team_pool=make_team_pool(1, 1),
+                                                    movement=movement),
+                                exploration=0.5, seed=seed, window=4)
+            orders.add(tuple(c.well.name for c in p.well_plans))
+        assert len(orders) > 1

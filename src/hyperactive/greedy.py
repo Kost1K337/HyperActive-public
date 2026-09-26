@@ -1,7 +1,10 @@
 """Greedy baseline planner: repeatedly add the candidate with the highest NPV."""
 
+from copy import deepcopy
 from datetime import datetime
-from typing import Optional
+from typing import Any, Callable, Optional
+
+import numpy as np
 
 from hyperactive.core import Plan, Well, WellPlanContext
 from hyperactive.planning.constraint import Constraint, ConstraintManager
@@ -57,16 +60,27 @@ class PlanBuilder:
         manager: BaseTeamManager,
         risk_strategy: Optional[RiskStrategy] = None,
         keep_order: bool = False,
+        exploration: float = 0.0,
+        seed: int = 0,
+        window: Optional[int] = None,
     ) -> Plan:
         """Build a plan.
 
         With ``keep_order=True`` the candidate with the earliest
         ``init_entry_date`` is taken instead of the best one; this evaluates a
         fixed well order under the same scheduling rules.
+
+        With ``exploration=p`` a uniformly random candidate among the ``window``
+        best-ranked ones (all of them if ``window`` is None) is taken with
+        probability ``p`` instead of the best one, seeded by ``seed``. This is
+        the exploration rule of :func:`hyperactive.inference.run_episode`
+        applied to the greedy ranking, so both sides can get the same search
+        budget. ``exploration=0`` is the deterministic pass.
         """
         plan = Plan()
         self.remaining_wells = wells.copy()
         self._reset_profile_state()
+        rng = np.random.default_rng(seed)
 
         current_start = self.start
         while self.remaining_wells and current_start < self.end_jobs:
@@ -80,7 +94,14 @@ class PlanBuilder:
                 current_start = self._constraints.get_period_end(current_start) or self.end
                 continue
 
-            best_candidate = self._select_best_candidate(candidates, keep_order=keep_order)
+            best_candidate = None
+            if exploration > 0.0 and not keep_order and float(rng.random()) < exploration:
+                ranked = sorted((c for c in candidates if c.cost is not None),
+                                key=self._ranking_key, reverse=True)[:window]
+                if ranked:
+                    best_candidate = ranked[int(rng.integers(len(ranked)))]
+            if best_candidate is None:
+                best_candidate = self._select_best_candidate(candidates, keep_order=keep_order)
             manager.assign(best_candidate)
 
             self.remaining_wells.remove(best_candidate.well)
@@ -149,12 +170,48 @@ class PlanBuilder:
                 ),
             )
 
-        return max(
-            (c for c in candidates if c.cost is not None),
-            key=lambda x: x.cost - (
-                x.metadata.get("drill_team_penalty", 0) if self.use_drill_team_penalty else 0
-            ),
+        return max((c for c in candidates if c.cost is not None), key=self._ranking_key)
+
+    def _ranking_key(self, context: WellPlanContext) -> float:
+        return context.cost - (
+            context.metadata.get("drill_team_penalty", 0) if self.use_drill_team_penalty else 0
         )
+
+    def compile_best_of(
+        self,
+        wells: list[Well],
+        make_manager: Callable[[], BaseTeamManager],
+        risk_strategy: Optional[RiskStrategy] = None,
+        episodes: int = 1,
+        exploration: float = 0.0,
+        window: Optional[int] = None,
+    ) -> tuple[Plan, dict[str, Any]]:
+        """Best of ``episodes`` plans by NPV; episode ``k`` is seeded with ``k``.
+
+        The greedy counterpart of :func:`hyperactive.inference.plan_with_policy`
+        (same seeds, same selection by total NPV, ties to the larger plan).
+        Every episode gets fresh copies of the wells, a fresh crew manager and
+        a fresh copy of ``risk_strategy``.
+        """
+        results = []
+        for episode in range(max(1, int(episodes))):
+            plan = self.compile(
+                wells=deepcopy(wells),
+                manager=make_manager(),
+                risk_strategy=deepcopy(risk_strategy),
+                exploration=exploration,
+                seed=episode,
+                window=window,
+            )
+            results.append((plan.total_profit(), len(plan.well_plans), episode, plan))
+        npv, size, episode, plan = max(results, key=lambda item: (item[0], item[1]))
+        stats = {
+            "episodes": len(results),
+            "exploration": exploration,
+            "selected_episode": episode,
+            "npvs": [item[0] for item in results],
+        }
+        return plan, stats
 
     def _is_cluster_finished(self, cluster: Optional[str]) -> bool:
         if cluster is None:
