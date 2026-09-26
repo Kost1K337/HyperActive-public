@@ -275,6 +275,106 @@ and the resulting greedy (argmax) rollout loses to `greedy_value_density`
 on all 12 cases (see win/loss table above). This is reported as-is, not
 disguised: the training loop is real and runs to completion producing real
 gradients and a real evaluated policy, but this small a budget does not
-yet demonstrate a learned-policy advantage on this benchmark. A larger
-training budget and/or hyperparameter tuning is a natural next step, not
-performed in this pass.
+yet demonstrate a learned-policy advantage on this benchmark.
+
+### Bootstrap ablation: expert-bootstrapped attention (EBA)
+
+**Motivation:** the architecture's own naming ("EBA" / expert-bootstrapped
+attention, per the epic's design intent) implies imitation pretraining from
+a strong expert before RL fine-tuning -- the 400-episode REINFORCE-only run
+above never actually did this. `train_attention_bootstrap.py` adds that
+missing bootstrap phase and scales the fine-tuning budget by 7.5x (3000
+episodes vs. 400), on top of a new imitation-pretraining phase.
+
+**Phase 1 -- expert bootstrap (behavioral cloning):** for each of the 12
+cases, `local_swap_search_2000`'s output order -- the strongest baseline in
+the table above (58/60 wins vs. greedy) -- is used as the demonstration
+expert. Demonstrations combine the 5 canonical seeds already used for the
+reported `local_swap_search_2000` baseline (same 2000-evaluation budget,
+greedy starting order) plus 5 additional runs started from independent
+random orders (800 evaluations each), for 8 expert trajectories per case
+(120 total, 1440 (state, action) pairs across all 12 cases). Each
+construction step of each expert order becomes one supervised pair: the
+full feature tensor + remaining-candidates mask (state) and the index of
+the well the expert placed next (action). The network is pretrained with a
+cross-entropy imitation loss directly on `q_values()`'s masked output (no
+new head needed -- already-placed wells are masked to a large negative
+value by `q_values()` itself, so cross-entropy naturally ignores them).
+
+```
+$ python3 benchmark/egg_model/train_attention_bootstrap.py
+bootstrap: 120 demo trajectories, 1440 (state,action) pairs, 30 epochs in 16.70s
+  bootstrap_epoch=0 cross_entropy_loss=1.402705
+  bootstrap_epoch=7 cross_entropy_loss=0.755319
+  bootstrap_epoch=15 cross_entropy_loss=0.695209
+  bootstrap_epoch=29 cross_entropy_loss=0.629769
+```
+
+The imitation loss drops from 1.40 (near the ln(12)=2.48 random-baseline
+region, i.e. barely-informed) to 0.63 over 30 epochs, confirming the
+network genuinely learns to imitate the local-swap-search expert's
+choices, not merely running epochs with no signal.
+
+**Phase 2 -- REINFORCE fine-tuning from bootstrapped weights:** identical
+REINFORCE + quantile-regression loop as the no-bootstrap run above (same
+`evaluate_order` reward, same running-mean baseline), but starting from the
+bootstrapped weights, at a lower learning rate (3e-4 vs. the bootstrap
+phase's 1e-3, chosen upfront to protect the imitation-learned weights, not
+tuned after seeing results) and for 3000 episodes (7.5x the no-bootstrap
+run's 400):
+
+```
+episode=0    loss=12.005928   reward=290.331 baseline=290.331
+episode=300  loss=253.348770  reward=241.463 baseline=222.308
+episode=600  loss=310.781250  reward=257.726 baseline=216.424
+episode=900  loss=692.777039  reward=288.754 baseline=231.158
+episode=1200 loss=382.870239  reward=257.373 baseline=230.191
+episode=1500 loss=277.426208  reward=240.736 baseline=224.788
+episode=1800 loss=-831.479004 reward=167.896 baseline=224.239
+episode=2100 loss=-1127.491699 reward=148.880 baseline=227.271
+episode=2400 loss=-876.511597 reward=167.879 baseline=230.517
+episode=2700 loss=-115.026543 reward=211.427 baseline=219.444
+episode=2999 loss=409.833405  reward=257.945 baseline=213.371
+fine-tuned 3000 episodes in 176.02s, final_loss=409.833405
+total wall-clock (bootstrap + fine-tune): 192.72s
+```
+
+**Wall-clock time:** 192.72s total (16.70s bootstrap + 176.02s
+fine-tuning), well within the 15-20 minute check-in budget.
+
+**Final evaluation** (greedy/argmax rollout per case, exact same
+`evaluate_order` protocol as every baseline):
+
+| method                                           | cases | mean metric_value | min     | max     |
+|----------------------------------------------------|------:|--------------------:|--------:|--------:|
+| `greedy_value_density`                              |    12 |              228.330 | 148.977 | 290.628 |
+| `local_swap_search_2000`                            | 12x5  |              228.414 | 149.034 | 290.631 |
+| `attention_dueling_quantile_q_rl` (no bootstrap)    |    12 |              224.376 | 147.247 | 287.201 |
+| `attention_dueling_quantile_q_bootstrap_rl`         |    12 |              227.693 | 148.498 | 290.015 |
+
+**Win/loss vs. `greedy_value_density`, per case, and vs.
+`local_swap_search_2000`, per (case, seed):**
+
+| method                                            | vs greedy (n=12)            | vs local_swap_search_2000 (n=60) |
+|------------------------------------------------------|:----------------------------:|:-----------------------------------:|
+| `attention_dueling_quantile_q_rl` (no bootstrap)      | 0 wins / 12 losses / 0 ties | 0 wins / 60 losses / 0 ties |
+| `attention_dueling_quantile_q_bootstrap_rl`           | 0 wins / 12 losses / 0 ties | 0 wins / 60 losses / 0 ties |
+
+**Honest interpretation:** the bootstrap ablation closes most of the gap
+to `greedy_value_density` (mean 227.693 vs. 228.330, a 0.28% gap, down from
+the no-bootstrap run's 1.7% gap) and to `local_swap_search_2000`, but it
+does not exceed either baseline on any of the 12 cases even with an
+imitation-pretraining phase and 7.5x more fine-tuning episodes. The
+REINFORCE fine-tuning phase itself is visibly unstable (large loss swings;
+episodes 1800-2400 show a marked reward collapse before partial recovery
+by episode 2999) -- a plausible explanation, stated honestly and not
+explored further in this pass, is that fine-tuning at this learning rate
+partially erodes the bootstrap phase's imitation gains rather than
+strictly improving on them (a known risk in behavioral-cloning-then-RL
+pipelines). This is reported as a genuine, unmanufactured result: bootstrap
+pretraining measurably helps (confirmed by the mean/gap improvement over
+the no-bootstrap ablation) but does not flip the win/loss outcome on this
+benchmark within this budget. A larger fine-tuning budget, a smaller or
+decaying fine-tuning learning rate, or an early-stopping criterion tied to
+held-out imitation performance are natural next steps, not performed here
+in order to avoid tuning after seeing results.

@@ -11,3 +11,4 @@ local_swap_search_2000,spe9_base,174.535568,true,"{""evaluations"": 2000, ""init
 local_swap_search_2000,spe9_base,174.536751,true,"{""evaluations"": 2000, ""initial_order"": ""greedy_value_density"", ""runtime_seconds"": 0.100692, ""seed"": 71, ""violations"": []}"
 local_swap_search_2000,spe9_base,174.517925,true,"{""evaluations"": 2000, ""initial_order"": ""greedy_value_density"", ""runtime_seconds"": 0.096655, ""seed"": 101, ""violations"": []}"
 attention_dueling_quantile_q_rl,spe9_base,174.460969,true,"{""episodes"": 400, ""training_seconds"": 92.84, ""final_training_loss"": -0.074339}"
+attention_dueling_quantile_q_bootstrap_rl,spe9_base,174.515295,true,"{""bootstrap_demo_trajectories"": 15, ""bootstrap_pairs"": 390, ""bootstrap_epochs"": 60, ""bootstrap_seconds"": 18.82, ""finetune_episodes"": 3000, ""finetune_seconds"": 385.64, ""final_bootstrap_loss"": 1.717079, ""final_finetune_loss"": 0.077820}"
