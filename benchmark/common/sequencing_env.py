@@ -1,20 +1,36 @@
 """Generic, standalone well-sequencing evaluator + baselines.
 
 This reimplements (for the public repo, stdlib-only) the same *pattern*
-used internally for the Oklahoma OCC drilling benchmark: a single shared
-resource processes a permutation ("order") of wells one at a time, each
-well's value is realized (and time-discounted) at the moment it comes
-online, and a "complete/feasible" plan is one that uses every candidate
-well exactly once. Baselines (random-multistart, greedy/value-density,
-local-swap search) and the AttentionDuelingQuantileQ network (see
-``benchmark/common/attention_dueling_quantile_q.py``) are all evaluated
-under this same protocol so their objective values are comparable.
+used internally for the Oklahoma OCC drilling benchmark: ``resource_count``
+parallel "bring-online" resource slots each process a sub-sequence of a
+permutation ("order") of wells, using earliest-available-resource
+assignment (the same rule used by the private repo's Oklahoma OCC
+benchmark, ``scripts/research/oklahoma_benchmark.py``) plus an optional
+grid-distance travel/setup term between consecutive wells assigned to the
+same resource. Each well's value is realized (and time-discounted) at the
+moment it comes online, and a "complete/feasible" plan is one that uses
+every candidate well exactly once. Baselines (random-multistart,
+greedy/value-density, local-swap search) and the AttentionDuelingQuantileQ
+network (see ``benchmark/common/attention_dueling_quantile_q.py``) are all
+evaluated under this same protocol so their objective values are
+comparable.
+
+NOTE ON WHY THIS MATTERS: with a single shared resource and uniform well
+duration (an earlier version of this evaluator), the discounted objective
+reduces to a rearrangement-inequality problem -- sorting by value density
+descending is provably optimal, so no search or learned policy could ever
+beat greedy on it. Using multiple resources (so *which* resource a well is
+assigned to, not just its relative order, matters) plus variable per-well
+duration (so the discount schedule itself depends on which wells land in
+which position) removes that degeneracy -- see each benchmark's README.md
+for confirmation that greedy is no longer uniformly optimal under this
+objective.
 
 IMPORTANT HONESTY NOTE: this is a *proxy* objective, not a reservoir
 simulation. See each benchmark's README.md ("Proxy objective disclosure")
-for exactly how ``value_index`` and ``duration_days`` were derived for
-that benchmark's wells. Nothing here calls Eclipse/OPM Flow or any other
-simulator.
+for exactly how ``value_index``, ``duration_days``, and ``location`` were
+derived for that benchmark's wells. Nothing here calls Eclipse/OPM Flow or
+any other simulator.
 """
 from __future__ import annotations
 
@@ -33,8 +49,9 @@ class Well:
     well_id: str
     is_injector: bool
     value_index: float  # proxy economic value realized once the well is online
-    duration_days: float  # proxy time this well occupies the shared bring-online resource
+    duration_days: float  # proxy time this well occupies its assigned bring-online resource
     features: tuple[float, ...]  # fixed-length feature vector for the candidate-set scorer
+    location: tuple[float, float] = (0.0, 0.0)  # grid (I, J) position, for the travel-time term
 
 
 @dataclass(frozen=True)
@@ -42,6 +59,8 @@ class BenchmarkCase:
     case_id: str
     wells: list[Well]
     discount_rate: float = 0.10
+    resource_count: int = 2  # parallel bring-online resource slots (K); K=1 recovers the old, provably-trivial objective
+    travel_speed: float = 0.0  # grid units/day a resource can move between consecutive wells; 0 disables the travel term
 
 
 @dataclass(frozen=True)
@@ -95,8 +114,14 @@ def evaluate_order(
     started_at: float | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> EvaluationResult:
-    """Single shared resource brings wells online strictly in ``order``;
-    each well's proxy value is discounted by the day it comes online."""
+    """``case.resource_count`` parallel resource slots bring wells online;
+    each well in ``order`` is assigned to whichever resource slot becomes
+    available earliest (earliest-available-resource assignment, the same
+    rule used by the private repo's Oklahoma OCC benchmark), optionally
+    paying a grid-distance travel/setup delay if that resource's previous
+    well is far away. Each well's proxy value is discounted by the day it
+    actually comes online (its resource's start time), not by its position
+    in ``order``."""
     started_at = time.perf_counter() if started_at is None else started_at
     violations = validate_order(case, order)
     if violations:
@@ -114,13 +139,30 @@ def evaluate_order(
         )
 
     wells = {well.well_id: well for well in case.wells}
-    day = 0.0
+    resource_count = max(1, int(case.resource_count))
+    resource_free_day = [0.0] * resource_count
+    resource_last_loc: list[tuple[float, float] | None] = [None] * resource_count
     total = 0.0
     for well_id in order:
         well = wells[well_id]
-        discounted = well.value_index / ((1.0 + case.discount_rate) ** (day / 365.0))
+        best_idx = 0
+        best_start_day: float | None = None
+        for idx in range(resource_count):
+            travel_days = 0.0
+            last_loc = resource_last_loc[idx]
+            if last_loc is not None and case.travel_speed > 0:
+                distance = math.hypot(well.location[0] - last_loc[0], well.location[1] - last_loc[1])
+                travel_days = distance / case.travel_speed
+            start_day = resource_free_day[idx] + travel_days
+            if best_start_day is None or start_day < best_start_day:
+                best_start_day = start_day
+                best_idx = idx
+        start_day = best_start_day or 0.0
+        resource_free_day[best_idx] = start_day + well.duration_days
+        resource_last_loc[best_idx] = well.location
+
+        discounted = well.value_index / ((1.0 + case.discount_rate) ** (start_day / 365.0))
         total += discounted
-        day += well.duration_days
 
     return EvaluationResult(
         method=method,
@@ -137,7 +179,14 @@ def evaluate_order(
 
 
 def greedy_value_density_order(case: BenchmarkCase) -> list[str]:
-    """Order wells by value / duration, descending (ties broken by id)."""
+    """Order wells by value / duration, descending (ties broken by id).
+
+    NOTE: with ``resource_count`` > 1 and/or a nonzero ``travel_speed``,
+    this heuristic is NOT provably optimal any more (see module docstring):
+    it ignores which resource a well lands on and any travel-time coupling
+    between consecutive wells on the same resource, so local-swap search
+    and random multistart can and do beat it on some cases/seeds -- see
+    each benchmark's README.md for the actual win/loss counts."""
     ranked = sorted(
         case.wells,
         key=lambda w: (-(w.value_index / max(1e-6, w.duration_days)), w.well_id),

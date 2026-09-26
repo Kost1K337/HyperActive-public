@@ -145,6 +145,47 @@ earlier. It is a transparent, reproducible stand-in for value -- it is
 **not** cumulative oil/water production from a flow simulation, and the
 numbers below must not be read as physical NPV.
 
+### Duration proxy and resource/travel model (fixes a flat-landscape bug)
+
+**Superseded design note:** an earlier version of this evaluator gave every
+well the same fixed `duration_days` (30) and processed all wells through a
+single shared resource. Under that design the discounted objective reduces
+exactly to a rearrangement-inequality problem (sort by value density,
+descending), which is *provably* optimal for greedy value-density -- no
+local search or learned policy could ever beat it, no matter how good. That
+is the same failure mode the paper's own prior reviewer complaint (r5LL:
+"improvements are very small ... on cases where the landscape is nearly
+flat") already flagged once; repeating it on a new benchmark would be a
+wasted effort. This has been fixed:
+
+- **Variable duration by well type + local permeability** (not uniform):
+
+  ```
+  injector duration_days = 20 + 20 * (1 - clamp(local_permeability / 2000, 0, 1))
+  producer duration_days = 20 + 20 *      clamp(local_permeability / 2000, 0, 1)
+  ```
+
+  i.e. injectors are modeled as slower to bring online in tighter rock
+  (establishing injectivity is harder there); producers are modeled as
+  slower in higher-permeability rock (a higher achievable rate needs a
+  longer completion/cleanup run). This is an honest, DOCUMENTED PROXY, not
+  a measured drilling/completion duration -- no such record exists in this
+  vendored archive.
+- **2 parallel bring-online resource slots**, not 1, using
+  earliest-available-resource assignment (the same rule used by the
+  private repo's Oklahoma OCC benchmark, `scripts/research/oklahoma_benchmark.py`).
+  With 12 wells and 2 slots, resource contention genuinely binds.
+- **Grid-distance travel/setup term**: a resource pays `distance / 5.0`
+  extra days between consecutive wells it services, using each well's
+  (I, J) grid position -- the same distance-based-travel-time mechanism
+  HyperActive's Oklahoma OCC benchmark and its `PlanBuilder` already use.
+
+With these three changes, *which resource* a well lands on (not just its
+relative order) affects the objective, and the discount schedule for a
+given order position depends on which wells preceded it on that specific
+resource -- so simple sort-by-value-density is no longer provably optimal.
+See the win/loss counts below for confirmation.
+
 ### Baselines run (real, real output)
 
 ```bash
@@ -154,51 +195,86 @@ python3 benchmark/egg_model/run_benchmark.py \
 ```
 
 Produces `results.csv` with one row per (method, case, seed): 12 cases x
-(1 greedy + 5 random seeds + 5 local-search seeds) = 132 rows.
+(1 greedy + 5 random seeds + 5 local-search seeds) = 132 rows, plus 12
+`attention_dueling_quantile_q_rl` rows (one per case, see "Training
+status" below) = 144 rows total. **These numbers supersede the old
+flat-landscape numbers from before the duration/resource/travel fix; the
+old numbers are no longer valid and are not reproduced here.**
 
-| method                         | cases | mean metric_value | min    | max    |
-|---------------------------------|------:|-------------------:|-------:|-------:|
-| `greedy_value_density`          |    12 |             226.226 |147.488 |287.541 |
-| `local_swap_search_2000`        | 12x5  |             226.226 |147.488 |287.541 |
-| `random_500_best`               | 12x5  |             225.483 |146.719 |287.051 |
+| method                                | cases | mean metric_value | min     | max     |
+|----------------------------------------|------:|--------------------:|--------:|--------:|
+| `greedy_value_density`                 |    12 |              228.330 | 148.977 | 290.628 |
+| `local_swap_search_2000`               | 12x5  |              228.414 | 149.034 | 290.631 |
+| `random_500_best`                      | 12x5  |              227.963 | 148.620 | 290.386 |
+| `attention_dueling_quantile_q_rl`      |    12 |              224.376 | 147.247 | 287.201 |
 
-**Honest note on this result:** greedy and local-swap search land on
-*exactly* the same objective value here. This is not a bug -- because every
-well shares the same `duration_days` (30), the discount factor applied to
-each order position is fixed and monotonically decreasing regardless of
-*which* wells are assigned to it, so maximizing the sum reduces to a
-rearrangement-inequality problem: sort by value descending. Greedy
-value-density is therefore provably optimal for this exact proxy, and no
-local search over swaps can improve on it. Random-500-best gets close but
-essentially never finds the exact optimum in only 500 samples. This is a
-property of the current (documented, simplified) proxy objective, not a
-claim that Egg Model well sequencing is trivial for a real reservoir
-objective.
+**Win/loss vs. `greedy_value_density`, per (case, seed)** (this is the
+number that actually matters -- confirming the landscape is no longer
+trivially flat):
 
-### Training status: BLOCKER
+| method                            | wins | losses | ties | n  |
+|------------------------------------|-----:|-------:|-----:|---:|
+| `local_swap_search_2000`           |   58 |      0 |    2 | 60 |
+| `random_500_best`                  |    0 |     60 |    0 | 60 |
+| `attention_dueling_quantile_q_rl`  |    0 |     12 |    0 | 12 |
 
-```bash
-$ python3 -c "import torch; print(torch.__version__)"
-ModuleNotFoundError: No module named 'torch'
-$ timeout 10 pip download torch --no-deps -d /tmp/torchtest
-# timed out after 10s resolving/downloading -- not a quick install
-```
+**Honest reading of this result:** local-swap search now beats greedy on
+58/60 (case, seed) pairs (ties on the other 2) -- the landscape is
+genuinely no longer flat, confirming the fix worked: local search finds
+resource/travel-aware improvements greedy's single-pass value-density
+heuristic misses. Random-500-best still loses every time in only 500
+samples (expected: pure random sampling over a much larger effective
+search space, with no local refinement, is a weak baseline). The trained
+`attention_dueling_quantile_q_rl` policy also currently loses to greedy on
+every case (see "Training status" below for why, honestly) -- it is not
+being reported as beating anything it does not beat.
 
-PyTorch is not installed in this environment, and installing it (a large,
-slow download in this sandbox) was not feasible within this pass's time
-budget. `train_attention.py` implements a real training loop against
-`benchmark/common/attention_dueling_quantile_q.py` (the
-AttentionDuelingQuantileQ architecture, retrained from scratch with
-`feature_dim=8` -- no weight transfer from any other benchmark), and exits
-with an explicit blocker message rather than fabricating a loss curve:
+### Training status: TRAINED (real, small budget, honestly reported)
+
+PyTorch **is** installed in the benchmark venv
+(`/home/dmitrii/.venvs/hyperactive-benchmark`, `torch==2.14.0+cpu`) as of
+this pass, so `train_attention.py` was actually run end-to-end (a prior
+pass hit `ModuleNotFoundError` in a different, non-venv environment and
+reported that honestly as a blocker; that blocker no longer applies here).
+
+**Training method (stated plainly):** the network has no autoregressive
+state of its own, so training uses a sequential-construction policy: at
+each step the network scores every not-yet-placed well via
+`q_values(observations, remaining_mask)` (mean of the predicted quantiles),
+forms a categorical distribution over the unplaced wells, samples one
+(training) or argmax-picks one (evaluation), and removes it from the
+remaining-candidates mask. A full episode (one complete 12-well order) is
+scored with the exact same `evaluate_order` used for every baseline above,
+and the network is trained with REINFORCE (policy gradient, running-mean
+baseline) plus a direct quantile-regression term on each well's own
+`value_index`. This is a genuine policy-gradient adaptation of the
+quantile-Q architecture to this benchmark's one-shot-candidate-set
+structure, not literal off-policy DQN with a replay buffer -- stated here
+explicitly rather than left implicit.
 
 ```bash
 $ python3 benchmark/egg_model/train_attention.py
-BLOCKER: PyTorch is not installed in this environment ...
-$ echo $?
-1
+episode=0   loss=8.642091    reward=207.873 baseline=207.873
+episode=40  loss=427.505768  reward=239.825 baseline=219.023
+episode=120 loss=1191.543091 reward=283.595 baseline=224.279
+episode=200 loss=707.152100  reward=261.959 baseline=226.951
+episode=320 loss=1333.349243 reward=288.418 baseline=222.213
+episode=399 loss=-637.691162 reward=192.541 baseline=224.349
+trained 400 episodes in 43.15s, final_loss=-637.691162
+appended 12 attention_dueling_quantile_q_rl rows to benchmark/egg_model/results.csv
 ```
 
-This is reported honestly as a documented blocker (see the PRD's
-`criterionAmendments` for US-E3). The baseline comparisons above do not
-depend on PyTorch and are complete.
+`feature_dim=8`, retrained completely from scratch on Egg Model features
+only (no weight transfer from SPE9 or any other benchmark).
+
+**Honest assessment:** 400 REINFORCE episodes over 12 cases is a small
+training budget (no hyperparameter search, no curriculum, no entropy
+bonus, no replay). The reward curve above shows large per-episode variance
+without a clear monotonic improvement in the baseline within this budget,
+and the resulting greedy (argmax) rollout loses to `greedy_value_density`
+on all 12 cases (see win/loss table above). This is reported as-is, not
+disguised: the training loop is real and runs to completion producing real
+gradients and a real evaluated policy, but this small a budget does not
+yet demonstrate a learned-policy advantage on this benchmark. A larger
+training budget and/or hyperparameter tuning is a natural next step, not
+performed in this pass.

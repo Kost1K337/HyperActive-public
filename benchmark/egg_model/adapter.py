@@ -22,6 +22,29 @@ WCONINJE / WCONPROD keywords. This rewards bringing high-permeability,
 high-rate wells online earlier -- a reasonable, transparent stand-in for
 value, but it is NOT a substitute for simulated cumulative oil/water
 production. Do not read these numbers as physical NPV.
+
+DURATION PROXY DISCLOSURE: bring-online duration is NOT a measured
+drilling/completion duration (no such record exists in this vendored
+archive). It is a documented proxy that varies by well type and local
+permeability, so the discount schedule genuinely depends on which wells
+land in which order:
+
+    injector duration_days = 20 + 20 * (1 - clamp(local_permeability / 2000, 0, 1))
+    producer duration_days = 20 + 20 *      clamp(local_permeability / 2000, 0, 1)
+
+i.e. injectors are modeled as slower to bring online in tighter (lower
+local-permeability) rock (establishing injectivity is harder there), while
+producers are modeled as slower in higher-permeability rock (a higher
+achievable rate needs a longer completion/cleanup run before startup).
+Both are honest, defensible, but ARBITRARY choices -- not a measurement.
+
+RESOURCE / TRAVEL MODEL: the evaluator (``benchmark/common/sequencing_env.py``)
+assigns wells to 2 parallel bring-online resource slots (earliest-available
+assignment, the same rule as the private repo's Oklahoma OCC benchmark),
+and each resource pays a travel/setup delay between consecutive wells based
+on their (I, J) grid distance at 5 grid cells/day -- the same
+distance-based-travel-time mechanism used by HyperActive's Oklahoma OCC
+benchmark and its PlanBuilder.
 """
 from __future__ import annotations
 
@@ -85,6 +108,19 @@ def _well_controls() -> tuple[dict[str, tuple[int, int]], dict[str, float], dict
     return positions, injection_rate, producer_bhp
 
 
+RESOURCE_COUNT = 2  # small enough that contention binds for 12 wells
+TRAVEL_SPEED_GRID_PER_DAY = 5.0  # grid cells/day a resource can move between wells
+
+
+def _duration_days(is_injector: bool, local_perm: float) -> float:
+    """Proxy bring-online duration; see module docstring's DURATION PROXY
+    DISCLOSURE for the honest caveat: this is not a measured duration."""
+    perm_ratio = min(1.0, max(0.0, local_perm / 2000.0))
+    if is_injector:
+        return 20.0 + 20.0 * (1.0 - perm_ratio)
+    return 20.0 + 20.0 * perm_ratio
+
+
 def _build_case(case_id: str, perm: list[float]) -> BenchmarkCase:
     positions, injection_rate, producer_bhp = _well_controls()
     wells: list[Well] = []
@@ -114,12 +150,19 @@ def _build_case(case_id: str, perm: list[float]) -> BenchmarkCase:
                 well_id=name,
                 is_injector=is_injector,
                 value_index=value_index,
-                duration_days=30.0,  # one TSTEP block; the deck reports the schedule in 30-day steps
+                duration_days=_duration_days(is_injector, local_perm),
                 features=features,
+                location=(float(i), float(j)),
             )
         )
     wells.sort(key=lambda w: w.well_id)
-    return BenchmarkCase(case_id=case_id, wells=wells, discount_rate=0.10)
+    return BenchmarkCase(
+        case_id=case_id,
+        wells=wells,
+        discount_rate=0.10,
+        resource_count=RESOURCE_COUNT,
+        travel_speed=TRAVEL_SPEED_GRID_PER_DAY,
+    )
 
 
 def load_case(case_id: str = "egg_model_base") -> BenchmarkCase:

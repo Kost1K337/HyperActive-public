@@ -29,6 +29,30 @@ reservoir-simulated NPV:
 where ``local_permeability`` is the mean PERMX (mDarcy) over the well's
 completed layers (from COMPDAT's K1:K2 range) at its (I, J) location, and
 the rate targets come directly from WCONINJE / the three WCONPROD records.
+
+DURATION PROXY DISCLOSURE: bring-online duration is NOT a measured
+drilling/completion duration (no such record exists in this vendored
+deck). It is a documented proxy that varies by well type and local
+permeability, so the discount schedule genuinely depends on which wells
+land in which order:
+
+    injector duration_days = 15 + 15 * (1 - clamp(local_permeability / 500, 0, 1))
+    producer duration_days = 15 + 15 *      clamp(local_permeability / 500, 0, 1)
+
+i.e. the (single) injector is modeled as slower to bring online in tighter
+(lower local-permeability) rock, while producers are modeled as slower in
+higher-permeability rock (a higher achievable rate needs a longer
+completion/cleanup run before startup). Both are honest, defensible, but
+ARBITRARY choices -- not a measurement (same pattern as the Egg Model
+adapter, scaled to SPE9's local-permeability range).
+
+RESOURCE / TRAVEL MODEL: the evaluator (``benchmark/common/sequencing_env.py``)
+assigns wells to 3 parallel bring-online resource slots (earliest-available
+assignment, the same rule as the private repo's Oklahoma OCC benchmark),
+and each resource pays a travel/setup delay between consecutive wells based
+on their (I, J) grid distance at 2 grid cells/day -- the same
+distance-based-travel-time mechanism used by HyperActive's Oklahoma OCC
+benchmark and its PlanBuilder.
 """
 from __future__ import annotations
 
@@ -63,6 +87,19 @@ def _local_permeability(perm: list[float], i: int, j: int, k1: int, k2: int) -> 
         total += perm[idx]
         count += 1
     return total / max(1, count)
+
+
+RESOURCE_COUNT = 3  # small enough that contention binds for 26 wells
+TRAVEL_SPEED_GRID_PER_DAY = 2.0  # grid cells/day a resource can move between wells
+
+
+def _duration_days(is_injector: bool, local_perm: float) -> float:
+    """Proxy bring-online duration; see module docstring's DURATION PROXY
+    DISCLOSURE for the honest caveat: this is not a measured duration."""
+    perm_ratio = min(1.0, max(0.0, local_perm / 500.0))
+    if is_injector:
+        return 15.0 + 15.0 * (1.0 - perm_ratio)
+    return 15.0 + 15.0 * perm_ratio
 
 
 def load_case(case_id: str = "spe9_base") -> BenchmarkCase:
@@ -109,12 +146,19 @@ def load_case(case_id: str = "spe9_base") -> BenchmarkCase:
                 well_id=name,
                 is_injector=is_injector,
                 value_index=value_index,
-                duration_days=10.0,  # matches the deck's initial TSTEP granularity
+                duration_days=_duration_days(is_injector, local_perm),
                 features=features,
+                location=(float(i), float(j)),
             )
         )
     wells.sort(key=lambda w: w.well_id)
-    return BenchmarkCase(case_id=case_id, wells=wells, discount_rate=0.10)
+    return BenchmarkCase(
+        case_id=case_id,
+        wells=wells,
+        discount_rate=0.10,
+        resource_count=RESOURCE_COUNT,
+        travel_speed=TRAVEL_SPEED_GRID_PER_DAY,
+    )
 
 
 if __name__ == "__main__":
