@@ -1,5 +1,12 @@
 # Baseline fairness correction
 
+> **Superseded in part by [`SEARCH_BUDGET_CORRECTION.md`](SEARCH_BUDGET_CORRECTION.md).**
+> The bc39 numbers below are best of 10 rollouts at exploration 0.15, while
+> the greedy baselines are one deterministic pass; that unequal search
+> budget is a second bug, corrected there (rows
+> `CORRECTED2 (search-budget fairness pass)`). The ranking-rule fix below
+> still stands.
+
 A diagnostic pass over the eight real-pipeline benchmarks (Egg Model, SPE9,
 SPE10, Volve, case_10, Norne, NLOG, Drogon) found two bugs that made the
 published bc39-vs-greedy comparison invalid, and one limitation of the bc39

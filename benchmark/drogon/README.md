@@ -326,3 +326,28 @@ here being evaluated outside the input range it was trained on. This is
 disclosed, not corrected: no retraining and no inference-time rescaling was
 applied, because either would change the model after the fact without
 proper training and validation.
+
+## Search-budget fairness correction
+
+The bc39 numbers above are best of 10 rollouts at exploration 0.15, picked
+by true NPV; the greedy baselines were one deterministic pass. That unequal
+search budget is corrected in
+[`../SEARCH_BUDGET_CORRECTION.md`](../SEARCH_BUDGET_CORRECTION.md) (rows
+`CORRECTED2 (search-budget fairness pass)` in
+[`../results_real_pipeline.csv`](../results_real_pipeline.csv)). Two
+comparisons replace the single one: **deterministic** (bc39 1 episode,
+exploration 0, vs one greedy pass; the primary, it measures the policy) and
+**matched budget** (both sides best of 10 at exploration 0.15, the greedy
+taking a random candidate among the top 8 with the same probability and
+seeds; `--greedy-matched-budget`). Same parameters as before.
+
+| | bc39 | greedy NPV only | greedy NPV - penalty | bc39 vs NPV-only greedy (primary) | bc39 vs penalised greedy |
+|---|---:|---:|---:|---:|---:|
+| deterministic | 296,650,035,339 (6) | 296,650,884,980 (6) | 296,650,884,980 (6) | **-0.0003%** | -0.0003% |
+| best of 10 | 296,650,035,339 (6) | 296,650,884,980 (6) | 296,650,884,980 (6) | **-0.0003%** | -0.0003% |
+
+NPV, wells scheduled in parentheses.
+
+Unchanged: -0.0003% under both comparisons; all 6 wells are scheduled either way and the plans differ only in order.
+
+Deterministic plan: `plan_bc39_deterministic.csv`.

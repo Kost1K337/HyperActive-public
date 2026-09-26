@@ -599,3 +599,28 @@ here being evaluated outside the input range it was trained on. This is
 disclosed, not corrected: no retraining and no inference-time rescaling was
 applied, because either would change the model after the fact without
 proper training and validation.
+
+## Search-budget fairness correction
+
+The bc39 numbers above are best of 10 rollouts at exploration 0.15, picked
+by true NPV; the greedy baselines were one deterministic pass. That unequal
+search budget is corrected in
+[`../SEARCH_BUDGET_CORRECTION.md`](../SEARCH_BUDGET_CORRECTION.md) (rows
+`CORRECTED2 (search-budget fairness pass)` in
+[`../results_real_pipeline.csv`](../results_real_pipeline.csv)). Two
+comparisons replace the single one: **deterministic** (bc39 1 episode,
+exploration 0, vs one greedy pass; the primary, it measures the policy) and
+**matched budget** (both sides best of 10 at exploration 0.15, the greedy
+taking a random candidate among the top 8 with the same probability and
+seeds; `--greedy-matched-budget`). Same parameters as before.
+
+| | bc39 | greedy NPV only | greedy NPV - penalty | bc39 vs NPV-only greedy (primary) | bc39 vs penalised greedy |
+|---|---:|---:|---:|---:|---:|
+| deterministic | 43,361,745,196 (12) | 43,808,870,706 (12) | 58,971,812,911 (16) | **-1.02%** | -26.47% |
+| best of 10 | 47,324,417,883 (13) | 51,729,831,812 (14) | 58,971,812,911 (16) | **-8.52%** | -19.75% |
+
+NPV, wells scheduled in parentheses.
+
+Deterministically bc39 is -1.02% vs the NPV-only greedy and -26.47% vs the penalised one. With a matched budget the +8.02% of the bug-fix pass becomes **-8.52%**: ten random restarts of the NPV-only greedy reach 51.73e9 vs bc39's 47.32e9. bc39 loses on SPE9 under every fair comparison.
+
+Deterministic plan: `plan_bc39_deterministic.csv`.

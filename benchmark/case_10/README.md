@@ -120,3 +120,32 @@ see the overview): candidate rows with any feature at the VecNormalize
 2.3%, all on `job_window_share` only; none of the absolute-scale economic
 features saturate. This is bc39's own data distribution, so the effect is
 minor here.
+
+## Search-budget fairness correction
+
+The bc39 numbers above are best of 10 rollouts at exploration 0.15, picked
+by true NPV; the greedy baselines were one deterministic pass. That unequal
+search budget is corrected in
+[`../SEARCH_BUDGET_CORRECTION.md`](../SEARCH_BUDGET_CORRECTION.md) (rows
+`CORRECTED2 (search-budget fairness pass)` in
+[`../results_real_pipeline.csv`](../results_real_pipeline.csv)). Two
+comparisons replace the single one: **deterministic** (bc39 1 episode,
+exploration 0, vs one greedy pass; the primary, it measures the policy) and
+**matched budget** (both sides best of 10 at exploration 0.15, the greedy
+taking a random candidate among the top 8 with the same probability and
+seeds; `--greedy-matched-budget`). Same parameters as before.
+
+| | bc39 | greedy NPV only | greedy NPV - penalty | bc39 vs NPV-only greedy (primary) | bc39 vs penalised greedy |
+|---|---:|---:|---:|---:|---:|
+| fund 48, deterministic | 5,715,132,492 (8) | 4,860,649,333 (6) | 4,860,649,333 (6) | **+17.58%** | +17.58% |
+| fund 48, best of 10 | 6,784,442,227 (10) | 6,041,438,472 (8) | 6,041,438,472 (8) | **+12.30%** | +12.30% |
+| fund 64, deterministic | 12,318,920,597 (10) | 10,603,736,532 (7) | 10,603,736,532 (7) | **+16.18%** | +16.18% |
+| fund 64, best of 10 | 12,206,853,099 (10) | 10,704,025,147 (7) | 10,704,025,147 (7) | **+14.04%** | +14.04% |
+| fund 150, deterministic | 7,237,860,235 (7) | 8,155,481,707 (8) | 8,155,481,707 (8) | **-11.25%** | -11.25% |
+| fund 150, best of 10 | 8,817,538,841 (9) | 8,649,496,154 (9) | 8,649,496,154 (9) | **+1.94%** | +1.94% |
+| fund 200, deterministic | 8,147,946,592 (9) | 6,950,302,884 (6) | 6,950,302,884 (6) | **+17.23%** | +17.23% |
+| fund 200, best of 10 | 8,784,582,880 (10) | 8,114,297,337 (9) | 8,114,297,337 (9) | **+8.26%** | +8.26% |
+
+NPV, wells scheduled in parentheses.
+
+case_10 is bc39's own training distribution. Deterministically bc39 wins funds 48, 64 and 200 (+17.58%, +16.18%, +17.23%) and loses fund 150 (-11.25%). With a matched budget it wins all four, but by much less than reported before: +39.58/+15.12/+8.12/+26.39% become +12.30/+14.04/+1.94/+8.26%. Outputs: `results_bc39_deterministic.xlsx`, `results_bc39_matched_budget.xlsx`.

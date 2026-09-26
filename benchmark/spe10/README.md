@@ -261,3 +261,28 @@ No change: 5 wells, 2 crews, no contention; all three plans are identical.
 
 Feature-scale check (disclosed limitation of bc39 on out-of-range inputs,
 see the overview): 0.0% of candidate rows clipped (15 rows) -- not affected.
+
+## Search-budget fairness correction
+
+The bc39 numbers above are best of 10 rollouts at exploration 0.15, picked
+by true NPV; the greedy baselines were one deterministic pass. That unequal
+search budget is corrected in
+[`../SEARCH_BUDGET_CORRECTION.md`](../SEARCH_BUDGET_CORRECTION.md) (rows
+`CORRECTED2 (search-budget fairness pass)` in
+[`../results_real_pipeline.csv`](../results_real_pipeline.csv)). Two
+comparisons replace the single one: **deterministic** (bc39 1 episode,
+exploration 0, vs one greedy pass; the primary, it measures the policy) and
+**matched budget** (both sides best of 10 at exploration 0.15, the greedy
+taking a random candidate among the top 8 with the same probability and
+seeds; `--greedy-matched-budget`). Same parameters as before.
+
+| | bc39 | greedy NPV only | greedy NPV - penalty | bc39 vs NPV-only greedy (primary) | bc39 vs penalised greedy |
+|---|---:|---:|---:|---:|---:|
+| deterministic | 1,734,414,147 (5) | 1,764,158,272 (5) | 1,764,158,272 (5) | **-1.69%** | -1.69% |
+| best of 10 | 1,764,158,272 (5) | 1,764,158,272 (5) | 1,764,158,272 (5) | **0.00%** | 0.00% |
+
+NPV, wells scheduled in parentheses.
+
+Deterministically bc39 is -1.69%; the 0.00% tie of the bug-fix pass came from the best-of-10 search, and with a matched budget both sides reach the same plan (0.00%).
+
+Deterministic plan: `plan_bc39_deterministic.csv`.

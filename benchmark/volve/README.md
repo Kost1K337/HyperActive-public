@@ -269,3 +269,28 @@ greedy plan (NPV - drill_team_penalty): 12 wells, NPV 6,429,779,953 (RL vs greed
 | bc39 vs penalised greedy | -0.76% | -0.10% |
 
 Greedy still wins, by a smaller margin. `plan_bc39.csv` is the corrected run.
+
+## Search-budget fairness correction
+
+The bc39 numbers above are best of 10 rollouts at exploration 0.15, picked
+by true NPV; the greedy baselines were one deterministic pass. That unequal
+search budget is corrected in
+[`../SEARCH_BUDGET_CORRECTION.md`](../SEARCH_BUDGET_CORRECTION.md) (rows
+`CORRECTED2 (search-budget fairness pass)` in
+[`../results_real_pipeline.csv`](../results_real_pipeline.csv)). Two
+comparisons replace the single one: **deterministic** (bc39 1 episode,
+exploration 0, vs one greedy pass; the primary, it measures the policy) and
+**matched budget** (both sides best of 10 at exploration 0.15, the greedy
+taking a random candidate among the top 8 with the same probability and
+seeds; `--greedy-matched-budget`). Same parameters as before.
+
+| | bc39 | greedy NPV only | greedy NPV - penalty | bc39 vs NPV-only greedy (primary) | bc39 vs penalised greedy |
+|---|---:|---:|---:|---:|---:|
+| deterministic | 6,390,103,682 (12) | 6,429,779,953 (12) | 6,429,779,953 (12) | **-0.62%** | -0.62% |
+| best of 10 | 6,423,330,891 (12) | 6,429,779,953 (12) | 6,429,779,953 (12) | **-0.10%** | -0.10% |
+
+NPV, wells scheduled in parentheses.
+
+bc39 loses under both comparisons: -0.62% deterministic, -0.10% with a matched budget (random restarts do not improve the greedy here).
+
+Deterministic plan: `plan_bc39_deterministic.csv`.

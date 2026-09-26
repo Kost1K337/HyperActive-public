@@ -687,3 +687,28 @@ uplift is +0.72%.
 
 Feature-scale check (disclosed limitation of bc39 on out-of-range inputs,
 see the overview): 0.0% of candidate rows clipped (65 rows) -- not affected.
+
+## Search-budget fairness correction
+
+The bc39 numbers above are best of 10 rollouts at exploration 0.15, picked
+by true NPV; the greedy baselines were one deterministic pass. That unequal
+search budget is corrected in
+[`../SEARCH_BUDGET_CORRECTION.md`](../SEARCH_BUDGET_CORRECTION.md) (rows
+`CORRECTED2 (search-budget fairness pass)` in
+[`../results_real_pipeline.csv`](../results_real_pipeline.csv)). Two
+comparisons replace the single one: **deterministic** (bc39 1 episode,
+exploration 0, vs one greedy pass; the primary, it measures the policy) and
+**matched budget** (both sides best of 10 at exploration 0.15, the greedy
+taking a random candidate among the top 8 with the same probability and
+seeds; `--greedy-matched-budget`). Same parameters as before.
+
+| | bc39 | greedy NPV only | greedy NPV - penalty | bc39 vs NPV-only greedy (primary) | bc39 vs penalised greedy |
+|---|---:|---:|---:|---:|---:|
+| deterministic | 1,482,494,720 (12) | 1,710,121,760 (10) | 1,529,277,304 (12) | **-13.31%** | -3.06% |
+| best of 10 | 1,722,483,028 (9) | 1,710,121,760 (10) | 1,704,866,230 (10) | **+0.72%** | +1.03% |
+
+NPV, wells scheduled in parentheses.
+
+Deterministically bc39 loses to both greedy variants (-13.31%, -3.06%); the +0.72% of the bug-fix pass exists only with the best-of-10 search, and survives a matched budget (+0.72%, +1.03% vs the penalised greedy, which improves to 1.705e9 with restarts). The policy's own choices are worse than greedy here; policy-guided search is marginally better than randomised greedy search.
+
+Deterministic plan: `plan_bc39_deterministic.csv`.
