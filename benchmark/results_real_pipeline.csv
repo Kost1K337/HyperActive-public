@@ -18,3 +18,5 @@ case_10_150,greedy,8,150,8155481707,,"CURRENT (US-F5): HyperActive's own bundled
 case_10_150,bc39_maskedcdqn,9,150,8817538841,8.12,"CURRENT (US-F5): same run_benchmark.py cell"
 case_10_200,greedy,6,200,6950302884,,"CURRENT (US-F5): HyperActive's own bundled/native dataset, run_benchmark.py --horizons 12 --crews 2x1 --episodes 10 --exploration 0.15 (see case_10/README.md)"
 case_10_200,bc39_maskedcdqn,10,200,8784582880,26.39,"CURRENT (US-F5): same run_benchmark.py cell"
+volve,greedy,12,12,6429779953,,"CURRENT (US-F7): real Sodir/NPD-located wellhead coordinates + bysarmad GitHub mirror well-header data, Production+Injection wells only (12/26), 1 real platform-template cluster (50 m bins, max real inter-well spacing 9.48 m), real hyperactive-plan run (see volve/README.md) -- oil_rate/liq_rate are an unanchored PLACEHOLDER, not measured (no rate data reachable in the time-boxed acquisition), disclosed in README"
+volve,bc39_maskedcdqn,12,12,6380791713,-0.76,"CURRENT (US-F7): same well pool/clustering, real hyperactive-plan run, 10 episodes exploration 0.15"
