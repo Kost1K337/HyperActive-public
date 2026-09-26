@@ -9,6 +9,11 @@ unchanged and still reproduces its published numbers bit for bit. Rows of
 this pass in `results_real_pipeline.csv` are tagged
 `BC39V2 (retrain with fixed features + singleton-cluster sampling)`.
 
+**Follow-up:** [section 8](#8-follow-up-bc39v2-full-full-160000-timestep-budget)
+retrains the same setup to bc39's full 160,000-timestep budget
+(`models/bc39v2-full/`) and gives the three-way comparison bc39 /
+bc39v2 (64k) / bc39v2-full.
+
 ## 1. The two defects
 
 ### Defect 1: rate and money features in absolute units
@@ -262,3 +267,239 @@ bc39v2 had 40% of bc39's training budget and shows no evidence of
 convergence. A full-budget run on a pool that contains singleton clusters
 is the next step before any claim that the fixes, rather than the
 retraining itself, cause the observed changes.
+
+## 8. Follow-up: bc39v2-full, full 160,000-timestep budget
+
+bc39v2 above had 40% of bc39's budget. This follow-up trains the identical
+setup to bc39's full 160,000 timesteps, as `models/bc39v2-full/`.
+`models/bc39/` and `models/bc39v2/` are unchanged. Rows in
+`results_real_pipeline.csv` are tagged
+`BC39V2FULL (full 160k-timestep retrain)`. Every earlier row is kept as is.
+
+### 8.1 Training run
+
+The 64k run could not be resumed. `experiments/train.py` has no resume
+option. The periodic checkpoints (`--save-interval`) hold only the network
+and the `VecNormalize` statistics, not the replay buffer or the RNG state.
+The epsilon schedule is also defined as a fraction of `total_timesteps`
+(`exploration_fraction` 0.8), so a continued run would not follow the
+schedule of a 160k run. bc39v2-full was therefore trained from scratch.
+
+Budget: `experiments/train.py:660` sets `total_steps = rl_episodes *
+well_count`. The 64k run confirms this: `--rl-episodes 4000`, 16 wells,
+last `env_step` 63,999 in `runs/bc39v2/episodes.csv`. So
+`--rl-episodes 10000` gives 160,000. Note that `--rl-episodes` counts
+units of `well_count` steps, not environment episodes. The real episodes
+average about 6.1 steps, so the 64k run had 10,494 of them and this run had
+26,494.
+
+```bash
+.venv_real/bin/python experiments/train.py --run-name bc39v2-full \
+  --wells-file benchmark/case_10/200/wells_200.xlsx \
+  --coordinates-file benchmark/case_10/200/coordinates_200.xlsx \
+  --settings models/bc39/training_settings.json \
+  --seed 8 --well-count 16 --action-window 8 --rl-episodes 10000 \
+  --sampling clusters --net-width 64 --weight-decay 0.0001 \
+  --behavioral-cloning 1 --greedy-prefill 0 --hot-start-subsets 30 \
+  --bc-patience 16 --greedy-every 50 \
+  --crew-mix 2x1,2x1,2x1,2x5,3x2,3x4,4x1,4x3,5x2,5x5 \
+  --horizon-mix 5,8,10,15,20,25 --drilling-months-mix 12,12,12,18,18,24,36,48,60 \
+  --oil-constraint-prob 0.5 --oil-constraint-share 0.08:0.35 \
+  --save-interval 500 --no-tracking
+```
+
+Only `--run-name` and `--rl-episodes` differ from the bc39v2 command.
+
+- **Timesteps reached: 160,000** (last `env_step` 159,999; 26,494 episodes).
+  The run completed its full schedule and exited with status 0.
+- **Wall clock** (`/usr/bin/time`): **2:58:41**, from 2026-09-26
+  19:59:17Z to 22:57:58Z.
+  - Warm start: 500 s. bc39v2 took 1,144 s on a more loaded machine.
+  - RL: 10,190 s (169.8 min, 15.7 timesteps/s).
+  - In-training evaluation: about 530 s.
+- The warm start is the same as bc39v2's, since both use the same seed.
+  Mean behavioural-cloning validation accuracy is 0.894 in both runs. The
+  RL phases differ because the epsilon schedule is stretched over 160k
+  steps. Epsilon reached its final 0.05 at episode 21,050, at
+  128,000 steps (0.8 of the total).
+- In-training evaluation (`runs/bc39v2-full/summary.json`, 30 subsets per
+  pool, vs the default 2x2 greedy):
+
+  | pool | aggregate uplift | win rate |
+  |---|---:|---:|
+  | train, bc39v2-full | +2.30% | 70.0% |
+  | train, bc39v2 | +2.60% | 46.7% |
+  | hold-out, bc39v2-full | +0.61% | 56.7% |
+  | hold-out, bc39v2 | -1.02% | 36.7% |
+
+### 8.2 Convergence assessment
+
+The in-training curve uses 1 greedy reference per 50 episodes. Those
+episodes are run epsilon-greedy. The data is in
+`runs/bc39v2-full/episodes.csv`. Grouped into 20,000-timestep bins:
+
+| timesteps | references | mean epsilon | median uplift | win rate | aggregate uplift (sum NPV_rl / sum NPV_greedy - 1) |
+|---|---:|---:|---:|---:|---:|
+| 0-20k | 66 | 0.28 | -13.81% | 43.9% | -8.75% |
+| 20-40k | 66 | 0.24 | +8.86% | 51.5% | -10.75% |
+| 40-60k | 65 | 0.20 | +12.95% | 55.4% | +3.49% |
+| 60-80k | 66 | 0.16 | -15.59% | 45.5% | -12.55% |
+| 80-100k | 65 | 0.12 | -19.02% | 43.1% | -14.19% |
+| 100-120k | 65 | 0.09 | +14.45% | 52.3% | -0.24% |
+| 120-140k | 69 | 0.05 | -12.19% | 47.8% | -6.80% |
+| 140-160k | 67 | 0.05 | +4.36% | 52.2% | +10.85% |
+
+**No convergence is visible, and neither is any improvement.**
+- The win rate stays between 43% and 55% in every bin, from the first to
+  the last.
+- The aggregate uplift swings between -14% and +11% with no monotone trend.
+  The last bin (+10.85%) is the best, but the bin before it has the same
+  epsilon and gave -6.80%.
+- A linear fit over the second half (per-reference uplift, clipped at
+  +/-100%) has a slope of +0.10 percentage points per 1,000 steps. That is
+  small next to the noise.
+
+With about 65 noisy references per bin, this signal cannot separate "has
+plateaued" from "is still slowly improving". The honest summary: the curve
+is flat within its noise for the whole run. Tripling the RL budget did not
+produce a trend visible in this signal. The 30-subset evaluation after
+training (section 8.1) improved over the 64k run on win rate and hold-out
+uplift, but not on train aggregate uplift.
+
+### 8.3 Three-way comparison (zero-shot, all 8 benchmarks)
+
+The protocol, commands and parameters are exactly those of section 5, with
+`--model models/bc39v2-full`. There is no per-benchmark fine-tuning. All
+greedy numbers again reproduced the CORRECTED2 greedy numbers exactly, in
+both protocols and for both rankings. Outputs:
+- `benchmark/<b>/plan_bc39v2full_deterministic.csv` and
+  `plan_bc39v2full.csv`;
+- `benchmark/case_10/results_bc39v2full_{deterministic,matched_budget}.xlsx`.
+
+NPV, with wells scheduled in parentheses. Uplift = policy / greedy - 1.
+case_10/200 is in-sample for both bc39v2 checkpoints (section 5 caveat).
+
+#### Primary: deterministic (1 episode, exploration 0) vs one deterministic greedy pass
+
+| benchmark | greedy NPV only | greedy NPV - penalty | bc39v2-full NPV | **bc39 vs NPV-only** | **bc39v2 (64k) vs NPV-only** | **bc39v2-full vs NPV-only** | bc39v2-full vs penalised |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Egg Model | 1,710,121,760 (10) | 1,529,277,304 (12) | 1,707,095,723 (10) | -13.31% | -5.09% | **-0.18%** | +11.63% |
+| SPE9 | 43,808,870,706 (12) | 58,971,812,911 (16) | 58,971,812,911 (16) | -1.02% | +17.38% | **+34.61%** | 0.00% (same NPV) |
+| SPE10 | 1,764,158,272 (5) | 1,764,158,272 (5) | 1,709,757,963 (5) | -1.69% | 0.00% | **-3.08%** | -3.08% |
+| Volve | 6,429,779,953 (12) | 6,429,779,953 (12) | 6,427,252,520 (12) | -0.62% | -0.10% | **-0.04%** | -0.04% |
+| NLOG | 10,259,729,536 (15) | 10,259,729,536 (15) | 10,259,729,536 (15) | -5.73% | -0.004% | **0.00% (same NPV)** | 0.00% |
+| Drogon | 296,650,884,980 (6) | 296,650,884,980 (6) | 296,650,578,690 (6) | -0.0003% | 0.00% | **-0.0001%** | -0.0001% |
+| Norne | 440,744,130,579 (8) | 440,744,130,579 (8) | 377,415,893,237 (7) | -23.19% | -13.61% | **-14.37%** | -14.37% |
+| case_10 / 48 | 4,860,649,333 (6) | 4,860,649,333 (6) | 4,860,649,333 (6) | +17.58% | +35.84% | **0.00% (same NPV)** | 0.00% |
+| case_10 / 64 | 10,603,736,532 (7) | 10,603,736,532 (7) | 11,006,110,358 (8) | +16.18% | -9.70% | **+3.79%** | +3.79% |
+| case_10 / 150 | 8,155,481,707 (8) | 8,155,481,707 (8) | 7,399,346,900 (7) | -11.25% | -0.75% | **-9.27%** | -9.27% |
+| case_10 / 200 (in-sample for v2, v2-full) | 6,950,302,884 (6) | 6,950,302,884 (6) | 8,843,770,238 (10) | +17.23% | -6.46% | **+27.24%** | +27.24% |
+
+#### Secondary: best of 10 at exploration 0.15, both sides (matched search budget)
+
+| benchmark | greedy NPV only, best of 10 | greedy NPV - penalty, best of 10 | bc39v2-full best of 10 | **bc39 vs NPV-only** | **bc39v2 (64k) vs NPV-only** | **bc39v2-full vs NPV-only** | bc39v2-full vs penalised |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Egg Model | 1,710,121,760 (10) | 1,704,866,230 (10) | 1,801,823,597 (9) | +0.72% | -0.37% | **+5.36%** | +5.69% |
+| SPE9 | 51,729,831,812 (14) | 58,971,812,911 (16) | 58,971,812,911 (16) | -8.52% | 0.00% | **+14.00%** | 0.00% (same NPV) |
+| SPE10 | 1,764,158,272 (5) | 1,764,158,272 (5) | 1,764,158,272 (5) | 0.00% | 0.00% | **0.00%** | 0.00% |
+| Volve | 6,429,779,953 (12) | 6,429,779,953 (12) | 6,428,242,807 (12) | -0.10% | -0.05% | **-0.02%** | -0.02% |
+| NLOG | 10,259,692,325 (15) | 10,259,692,325 (15) | 10,259,692,325 (15) | -1.20% | -0.004% | **0.00% (same NPV)** | 0.00% |
+| Drogon | 296,650,884,980 (6) | 296,650,884,980 (6) | 296,650,578,690 (6) | -0.0003% | 0.00% | **-0.0001%** | -0.0001% |
+| Norne | 440,744,130,579 (8) | 440,744,130,579 (8) | 380,734,886,167 (7) | -8.86% | -2.50% | **-13.62%** | -13.62% |
+| case_10 / 48 | 6,041,438,472 (8) | 6,041,438,472 (8) | 6,021,978,785 (8) | +12.30% | +19.21% | **-0.32%** | -0.32% |
+| case_10 / 64 | 10,704,025,147 (7) | 10,704,025,147 (7) | 11,500,491,261 (8) | +14.04% | +10.04% | **+7.44%** | +7.44% |
+| case_10 / 150 | 8,649,496,154 (9) | 8,649,496,154 (9) | 8,670,178,821 (9) | +1.94% | -0.81% | **+0.24%** | +0.24% |
+| case_10 / 200 (in-sample for v2, v2-full) | 8,114,297,337 (9) | 8,114,297,337 (9) | 9,774,227,843 (11) | +8.26% | -11.56% | **+20.46%** | +20.46% |
+
+#### Win / tie / loss counts vs the NPV-only greedy
+
+"Tie" means an identical NPV. Every other difference counts as a win or a
+loss, however small (Drogon's -0.0001% is a loss).
+
+| | bc39 | bc39v2 (64k) | bc39v2-full |
+|---|---|---|---|
+| deterministic, 7 external | 0 / 0 / 7 | 1 / 2 / 4 | 1 / 1 / 5 |
+| deterministic, case_10 (4) | 3 / 0 / 1 | 1 / 0 / 3 | 2 / 1 / 1 |
+| matched budget, 7 external | 1 / 1 / 5 | 0 / 3 / 4 | 2 / 2 / 3 |
+| matched budget, case_10 (4) | 4 / 0 / 0 | 2 / 0 / 2 | 3 / 0 / 1 |
+
+### 8.4 Reading the result
+
+**Deterministic (primary), 7 external benchmarks.**
+- bc39v2-full beats the NPV-only greedy on **SPE9 only (+34.61%)**. There
+  its plan has exactly the penalised greedy's NPV (58,971,812,911, 16
+  wells), so on SPE9 it matches the stronger baseline and does not beat it.
+- It ties NLOG exactly.
+- It loses the other five:
+  - Egg Model -0.18%;
+  - SPE10 -3.08%;
+  - Volve -0.04%;
+  - Drogon -0.0001%;
+  - Norne -14.37%.
+- Four of those losses are small. SPE10's -3.08% is the largest SPE10 loss
+  of the three checkpoints: bc39 lost -1.69% and bc39v2 tied.
+- Norne is essentially unchanged from bc39v2 (-13.61%) and still clearly
+  lost.
+
+**The larger budget is not a uniform improvement over bc39v2 (64k).**
+Deterministically, bc39v2-full is:
+- better on Egg Model, SPE9, Volve, NLOG, case_10/64 and case_10/200;
+- worse on SPE10, Drogon, Norne, case_10/48 and case_10/150.
+
+The external win count does not improve: 1 in both checkpoints. The
+external tie count drops from 2 to 1. It is also no longer true that the
+retrained model is never worse than bc39 on an external field: SPE10 is
+worse (-3.08% vs -1.69%).
+
+**case_10 partly recovers, mostly in-sample.**
+- bc39v2-full wins case_10/64 (+3.79%, bc39 +16.18%) and case_10/200
+  (+27.24%, bc39 +17.23%).
+- It ties case_10/48 exactly. bc39v2 had +35.84% there and bc39 +17.58%.
+- It loses case_10/150 (-9.27%).
+- The only case_10 cell where it beats bc39 is 200, which is in its
+  training pool. On the three funds it did not train on, it is below bc39
+  on 48 and 64 and above bc39 only on 150, where both lose.
+
+So bc39v2-full does not recover bc39's out-of-sample case_10 advantage.
+
+**Matched budget (secondary).**
+- bc39v2-full's best-of-10 wins Egg Model (+5.36%, the best of the three
+  checkpoints) and SPE9 (+14.00%, again with the same NPV as the penalised
+  greedy).
+- It ties SPE10 and NLOG.
+- It loses Volve (-0.02%), Drogon (-0.0001%) and Norne (-13.62%). On Norne,
+  bc39v2's -2.50% becomes a much larger loss, worse than bc39's -8.86%.
+- On case_10 it wins 64, 150 and 200 and loses 48 by 0.32%.
+
+**Single-seed caveat.** Each checkpoint is one training run with one seed.
+The cell-level differences between bc39v2 and bc39v2-full have mixed signs
+and are often large: case_10/48 moves from +35.84% to 0.00%, case_10/200
+from -6.46% to +27.24%. That suggests large run-to-run variance. We did
+not measure seed variance, so these differences cannot be attributed to
+the training budget alone.
+
+### 8.5 Honest headline (bc39v2-full)
+
+Training the fixed-feature setup to bc39's full 160,000-timestep budget
+gives a checkpoint that:
+
+- still does **not** beat the greedy baseline across the external
+  benchmarks. Deterministically, against the NPV-only greedy, it wins 1 of
+  7 (SPE9), ties 1 (NLOG) and loses 5. Against the penalised greedy it
+  wins Egg Model and ties SPE9 and NLOG.
+- keeps the SPE9 gain from the feature fix, and on SPE9 reaches but does
+  not exceed the penalised greedy.
+- is close to the greedy on Egg Model, Volve, NLOG and Drogon (within
+  0.2%), loses SPE10 by 3%, and still loses Norne by about 14%.
+- wins 2 of 4 case_10 funds deterministically, up from 1 for bc39v2. One
+  of the two is its in-sample training pool. It does not recover bc39's
+  3-of-4 out-of-sample case_10 result.
+- shows no convergence trend in its training curve (section 8.2). More
+  budget did not yield a consistent improvement over the 64k checkpoint.
+
+The comparison supports the claim that the feature-scaling fix removes the
+input saturation and the large bc39 losses on SPE9 and Egg Model. It does
+**not** support a claim that the learned scorer beats a simple NPV-ranked
+greedy zero-shot on external fields. The singleton-cluster fix is still
+unexercised: no public training pool has singleton clusters. Multi-seed
+training is needed before any budget effect can be claimed.
