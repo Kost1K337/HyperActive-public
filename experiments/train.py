@@ -214,12 +214,15 @@ def parse_crew_mix(value: Optional[str]) -> Optional[list[tuple[int, int]]]:
 
 
 def build_cluster_index(pool: list[Any]) -> tuple[dict[str, list[Any]], list[str]]:
-    """Wells by cluster; single-well clusters carry no grouping and are not sampled."""
+    """Wells by cluster and the clusters to sample from.
+
+    Single-well clusters are sampled too: real fields often have one well per
+    cluster, and a policy that never saw that topology meets it only at inference.
+    """
     by_cluster: dict[str, list[Any]] = {}
     for well in pool:
         by_cluster.setdefault(str(well.cluster), []).append(well)
-    usable = [c for c, ws in by_cluster.items() if len(ws) >= 2]
-    return by_cluster, usable
+    return by_cluster, list(by_cluster)
 
 
 def pick_by_clusters(by_cluster: dict[str, list[Any]], clusters: list[str],
@@ -340,7 +343,7 @@ class RandomSubsetPlanEnv(PlanEnv):
         self._episodes = 0
         self._by_cluster, self._clusters = build_cluster_index(pool)
         if args.sampling == "clusters" and not self._clusters:
-            raise ValueError("the pool has no clusters with two or more wells")
+            raise ValueError("the pool has no clusters")
         self._crew_mix = parse_crew_mix(args.crew_mix)
         self._horizon_mix = parse_int_list(args.horizon_mix)
         self._drilling_mix = parse_int_list(args.drilling_months_mix)
@@ -526,6 +529,7 @@ def save_model(agent: MaskedCDQN, env: VecNormalize, model_dir: Path, extra: Opt
     env.save(str(model_dir / "vec_normalize.pkl"))
     manifest = {
         "feature_set": FEATURE_SET,
+        "feature_scaling": "pool_relative",
         "action_window": int(agent.n_actions),
         "files": {
             "model": {"path": "model.zip", "sha256": sha256_of(model_dir / "model.zip")},

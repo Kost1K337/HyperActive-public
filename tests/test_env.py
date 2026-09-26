@@ -59,6 +59,40 @@ class TestObservationSpace:
         assert env.action_space.n == N_ACTIONS
 
 
+class TestPoolRelativeScale:
+    # oil_rate, liq_rate, cost_npv, cash_flow, capex, travel_cost
+    COLUMNS = [0, 1, 3, 4, 5, 6]
+
+    def test_rate_and_money_columns_lie_in_unit_range(self, env, small_pool):
+        obs, _ = env.reset()
+        rows = obs[:len(small_pool), self.COLUMNS]
+        assert np.all(np.abs(rows) <= 1.0 + 1e-6)
+        assert np.isclose(np.abs(rows[:, 0]).max(), 1.0)
+
+    def test_columns_are_invariant_to_scaling_all_rates(self, env, small_pool, make_well, npv,
+                                                         movement, make_team_pool, linear_profile):
+        obs, _ = env.reset()
+        scaled = [make_well(well.name, cluster=well.cluster, oil_rate=well.oil_rate * 50,
+                            liq_rate=well.liq_rate * 50)
+                  for well in small_pool]
+        other = PlanEnv(
+            wells=scaled, team_pool=make_team_pool(2, 2), movement=movement,
+            cost_function=npv, n_actions=N_ACTIONS, start=START, end=END,
+            production_profile=linear_profile,
+            risk_strategy=ClusterRandomRiskStrategy(trigger_chance=0.0),
+        )
+        scaled_obs, _ = other.reset()
+        # Rows are ordered by NPV, which scaling may reorder: compare as sets.
+        np.testing.assert_allclose(np.sort(scaled_obs[:, :2], axis=0),
+                                   np.sort(obs[:, :2], axis=0), rtol=1e-5)
+
+    def test_absolute_encoding_is_kept_for_older_models(self, env, small_pool):
+        env.pool_relative_scale = False
+        obs, _ = env.reset()
+        oil = sorted(float(well.oil_rate) for well in small_pool)
+        assert sorted(obs[:len(small_pool), 0].tolist()) == pytest.approx(oil)
+
+
 class TestActionMask:
     def test_reset_mask_matches_pool_size_when_smaller_than_window(self, env, small_pool):
         _, info = env.reset()

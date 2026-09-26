@@ -37,7 +37,9 @@ FEATURE_SET = "gen39"
 
 DAY_SECONDS = 86400.0
 
-# Candidate physics, economics, relative time and plan state.
+# Candidate physics, economics, relative time and plan state. The two rates and
+# four money values are divided by their largest magnitude in the candidate
+# window (see CandidateFeatures.pool_relative_scale).
 BASE_FEATURE_NAMES = (
     # well physics
     "oil_rate", "liq_rate", "length",
@@ -128,6 +130,15 @@ class CandidateFeatures:
     ``cost_function``, ``infra``, ``_constraints`` and ``_last_cluster``.
     """
 
+    pool_relative_scale: bool = True
+    """Encode the rate and money features relative to the candidate window.
+
+    ``False`` reproduces the absolute encoding that ``bc39`` was trained on.
+    Both encodings have the same 39 columns, so a model manifest records which
+    one it expects (``feature_scaling``) and :func:`hyperactive.inference.run_episode`
+    sets this flag from it.
+    """
+
     # ------------------------------------------------------------------
     # Row assembly
     # ------------------------------------------------------------------
@@ -191,17 +202,16 @@ class CandidateFeatures:
         first = entries[0]
         second = entries[1] if len(entries) > 1 else None
         finish = max(entry.end for entry in entries)
+        rates_and_money = (self._pool_relative(well_context) if self.pool_relative_scale
+                           else self._absolute_scale(well_context))
 
         return [
             # well physics
-            self._rate_to_float(well.oil_rate),
-            self._rate_to_float(well.liq_rate),
+            rates_and_money[0],
+            rates_and_money[1],
             float(well.length),
             # economics
-            self._to_float(well_context.cost),
-            self._to_float(well_context.metadata.get("cash_flow", 0.0)),
-            self._to_float(well_context.metadata.get("capex", 0.0)),
-            float(well_context.metadata.get("travel_cost", 0.0)),
+            *rates_and_money[2:],
             # relative time, days from the planning front
             self._days_from(well.init_entry_date, now),
             1.0 if well.init_entry_date else 0.0,
@@ -219,6 +229,36 @@ class CandidateFeatures:
             1.0 if self._last_cluster is not None
             and str(well.cluster) == self._last_cluster else 0.0,
         ]
+
+    def _absolute_scale(self, context) -> list[float]:
+        """``oil_rate``, ``liq_rate``, ``cost_npv``, ``cash_flow``, ``capex``,
+        ``travel_cost`` in their own units (t/day and money)."""
+        well = context.well
+        return [
+            self._rate_to_float(well.oil_rate),
+            self._rate_to_float(well.liq_rate),
+            self._to_float(context.cost),
+            self._to_float(context.metadata.get("cash_flow", 0.0)),
+            self._to_float(context.metadata.get("capex", 0.0)),
+            float(context.metadata.get("travel_cost", 0.0)),
+        ]
+
+    def _pool_relative(self, well_context) -> list[float]:
+        """The six values of :meth:`_absolute_scale` divided by their largest
+        magnitude within the window.
+
+        In absolute units these values follow the scale of the field: a pool
+        with rates a hundred times the training ones puts almost every row at
+        the ``VecNormalize`` clip and makes candidates indistinguishable.
+        Relative to the window they lie in [-1, 1] on any field. Division by
+        the largest magnitude rather than min-max (as in ``value_density_norm``)
+        keeps the sign of NPV and cash flow and keeps zero at zero.
+        """
+
+        own = self._absolute_scale(well_context)
+        rows = [self._absolute_scale(c) for c in (self.candidates or [])] or [own]
+        scales = [max(abs(row[i]) for row in rows + [own]) for i in range(len(own))]
+        return [value / scale if scale > 0 else 0.0 for value, scale in zip(own, scales)]
 
     # ------------------------------------------------------------------
     # Cluster block (3)

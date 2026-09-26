@@ -133,6 +133,8 @@ def run_episode(
         raise ValueError(
             f"Environment has {env.action_space.n} actions, the policy expects {bundle.n_actions}."
         )
+    # Manifests without the key predate pool-relative scaling (bc39).
+    env.pool_relative_scale = bundle.manifest.get("feature_scaling") == "pool_relative"
     runtime = _runtime_env(env, bundle)
     obs = runtime.reset()
     rng = np.random.default_rng(seed)
