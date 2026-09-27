@@ -13,6 +13,9 @@ this pass in `results_real_pipeline.csv` are tagged
 retrains the same setup to bc39's full 160,000-timestep budget
 (`models/bc39v2-full/`) and gives the three-way comparison bc39 /
 bc39v2 (64k) / bc39v2-full.
+[Section 9](#9-multi-seed-variance-study-at-the-full-160k-budget) retrains
+the bc39v2-full setup with 3 more seeds (`models/bc39v2-seed{1,2,3}/`) to
+measure seed-to-seed variance.
 
 ## 1. The two defects
 
@@ -503,3 +506,163 @@ input saturation and the large bc39 losses on SPE9 and Egg Model. It does
 greedy zero-shot on external fields. The singleton-cluster fix is still
 unexercised: no public training pool has singleton clusters. Multi-seed
 training is needed before any budget effect can be claimed.
+
+## 9. Multi-seed variance study at the full 160k budget
+
+Sections 5 and 8 each rest on one training run with seed 8. The cell-level
+changes between the 64k and 160k checkpoints were large and had mixed
+signs, so they could be a budget effect or ordinary seed-to-seed RL
+variance. This section trains the bc39v2-full setup with 3 more seeds and
+evaluates each checkpoint with the same protocol.
+
+**Status: in progress.** Seed 1 is done. Seeds 2 and 3 are training
+sequentially; this section is updated as each one finishes.
+
+### 9.1 Seed choice and run plan
+
+- **Seeds 1, 2, 3**: the first three positive integers other than 8. They
+  were fixed before any result was seen. There is no other reason for the
+  choice.
+- **Setup:** identical to bc39v2-full (section 8.1) except `--seed S` and
+  `--run-name bc39v2-seedS`. Same budget: `--rl-episodes 10000`, which is
+  160,000 timesteps. Checkpoints are in `models/bc39v2-seed{1,2,3}/`.
+  `models/bc39/`, `models/bc39v2/` and `models/bc39v2-full/` are unchanged.
+- The `--seed` flag also sets the train/hold-out split unless `--split-seed`
+  is given. `split_seed` is null here, as for bc39v2-full, so the split
+  changes with the seed. Each seed therefore holds out a different 40 of
+  the 200 `case_10/200` wells. This is part of what "seed variance" means in
+  this study. case_10/200 is in-sample for every seed either way.
+- **Runs were sequential, not parallel.** The machine has 4 cores. One
+  training run used about 190% CPU (`top`, 5 s sample during the RL phase),
+  and the machine was about 41% idle with it running. A second run would
+  have needed more than the free capacity, so running two at once would
+  have slowed both.
+- Evaluation of each seed ran right after its training and before the next
+  seed started, so no evaluation overlapped a training run.
+
+### 9.2 Training runs
+
+| seed | wall clock (`/usr/bin/time`) | start - end (UTC) | warm start | RL | RL timesteps/s | episodes | BC val. acc. (mean of 30) | in-training eval, train pool: aggregate uplift / win rate | hold-out pool |
+|---|---|---|---:|---:|---:|---:|---:|---|---|
+| 8 (bc39v2-full) | 2:58:41 | 2026-09-26 19:59:17 - 22:57:58 | 500 s | 10,190 s | 15.7 | 26,494 | 0.894 | +2.30% / 70.0% | +0.61% / 56.7% |
+| 1 | 3:09:52 | 2026-09-27 07:43:06 - 10:52:59 | 458 s | 10,810 s | 14.8 | 26,522 | 0.885 | +1.86% / 50.0% | -0.45% / 36.7% |
+
+Every run completed the full 160,000-timestep schedule and exited with
+status 0. `episodes.csv` logs finished episodes only. For seed 1 the last
+logged episode ends at env step 159,996; `learn()` stops at 160,000 in the
+middle of the next episode.
+
+The in-training evaluation columns are not comparable across seeds. The
+train and hold-out pools, and the 30 evaluation subsets
+(`experiments/train.py:728`, `split_seed + 3`), both depend on the seed.
+
+### 9.3 Per-seed results (interim: seeds 8 and 1)
+
+Same protocol, commands and parameters as sections 5 and 8.3, with
+`--model models/bc39v2-seedS`. Outputs:
+`benchmark/<b>/plan_bc39v2seedS_deterministic.csv`, `plan_bc39v2seedS.csv`
+and `benchmark/case_10/results_bc39v2seedS_{deterministic,matched_budget}.xlsx`.
+Every greedy number reproduced the CORRECTED2 greedy exactly, in both
+protocols and for both rankings. Seed 8 is bc39v2-full (section 8.3).
+NPV, wells scheduled in parentheses. A tie is an NPV within 1 unit
+(rounding in the case_10 workbooks); any other difference is a win or a
+loss.
+#### NPV per seed, deterministic (1 episode, exploration 0)
+
+| benchmark | greedy NPV only | greedy NPV - penalty | seed 8 | seed 1 |
+|---|---:|---:|---:|---:|
+| Egg Model | 1,710,121,760 (10) | 1,529,277,304 (12) | 1,707,095,723 (10) | 1,896,517,681 (8) |
+| SPE9 | 43,808,870,706 (12) | 58,971,812,911 (16) | 58,971,812,911 (16) | 43,808,870,706 (12) |
+| SPE10 | 1,764,158,272 (5) | 1,764,158,272 (5) | 1,709,757,963 (5) | 1,764,158,272 (5) |
+| Volve | 6,429,779,953 (12) | 6,429,779,953 (12) | 6,427,252,520 (12) | 6,417,439,261 (12) |
+| NLOG | 10,259,729,536 (15) | 10,259,729,536 (15) | 10,259,729,536 (15) | 10,259,705,249 (15) |
+| Drogon | 296,650,884,980 (6) | 296,650,884,980 (6) | 296,650,578,690 (6) | 296,650,884,980 (6) |
+| Norne | 440,744,130,579 (8) | 440,744,130,579 (8) | 377,415,893,237 (7) | 440,670,628,357 (8) |
+| case_10 / 48 | 4,860,649,333 (6) | 4,860,649,333 (6) | 4,860,649,333 (6) | 7,816,076,935 (11) |
+| case_10 / 64 | 10,603,736,532 (7) | 10,603,736,532 (7) | 11,006,110,358 (8) | 10,698,541,555 (7) |
+| case_10 / 150 | 8,155,481,707 (8) | 8,155,481,707 (8) | 7,399,346,900 (7) | 8,155,615,432 (8) |
+| case_10 / 200 (in-sample) | 6,950,302,884 (6) | 6,950,302,884 (6) | 8,843,770,238 (10) | 7,539,042,365 (7) |
+
+#### NPV per seed, best of 10 at exploration 0.15 (matched budget)
+
+| benchmark | greedy NPV only | greedy NPV - penalty | seed 8 | seed 1 |
+|---|---:|---:|---:|---:|
+| Egg Model | 1,710,121,760 (10) | 1,704,866,230 (10) | 1,801,823,597 (9) | 1,896,517,681 (8) |
+| SPE9 | 51,729,831,812 (14) | 58,971,812,911 (16) | 58,971,812,911 (16) | 51,729,831,812 (14) |
+| SPE10 | 1,764,158,272 (5) | 1,764,158,272 (5) | 1,764,158,272 (5) | 1,764,158,272 (5) |
+| Volve | 6,429,779,953 (12) | 6,429,779,953 (12) | 6,428,242,807 (12) | 6,418,232,131 (12) |
+| NLOG | 10,259,692,325 (15) | 10,259,692,325 (15) | 10,259,692,325 (15) | 10,259,684,303 (15) |
+| Drogon | 296,650,884,980 (6) | 296,650,884,980 (6) | 296,650,578,690 (6) | 296,650,884,980 (6) |
+| Norne | 440,744,130,579 (8) | 440,744,130,579 (8) | 380,734,886,167 (7) | 440,670,628,357 (8) |
+| case_10 / 48 | 6,041,438,472 (8) | 6,041,438,472 (8) | 6,021,978,785 (8) | 7,816,076,935 (11) |
+| case_10 / 64 | 10,704,025,147 (7) | 10,704,025,147 (7) | 11,500,491,261 (8) | 11,389,241,800 (8) |
+| case_10 / 150 | 8,649,496,154 (9) | 8,649,496,154 (9) | 8,670,178,821 (9) | 8,649,629,879 (9) |
+| case_10 / 200 (in-sample) | 8,114,297,337 (9) | 8,114,297,337 (9) | 9,774,227,843 (11) | 8,794,134,914 (9) |
+
+#### Uplift vs the NPV-only greedy (primary baseline), deterministic (1 episode, exploration 0)
+
+| benchmark | seed 8 | seed 1 | mean | std (pp) | range | W / T / L |
+|---|---:|---:|---:|---:|---|---|
+| Egg Model | -0.18% | +10.90% | +5.36% | 7.83 | -0.18% .. +10.90% | 1 / 0 / 1 |
+| SPE9 | +34.61% | 0.00% | +17.31% | 24.47 | 0.00% .. +34.61% | 1 / 1 / 0 |
+| SPE10 | -3.08% | 0.00% | -1.54% | 2.18 | -3.08% .. 0.00% | 0 / 1 / 1 |
+| Volve | -0.04% | -0.19% | -0.12% | 0.11 | -0.19% .. -0.04% | 0 / 0 / 2 |
+| NLOG | 0.00% | -0.0002% | -0.0001% | 0.00 | -0.0002% .. 0.00% | 0 / 1 / 1 |
+| Drogon | -0.0001% | 0.00% | -0.0001% | 0.00 | -0.0001% .. 0.00% | 0 / 1 / 1 |
+| Norne | -14.37% | -0.02% | -7.19% | 10.15 | -14.37% .. -0.02% | 0 / 0 / 2 |
+| case_10 / 48 | 0.00% | +60.80% | +30.40% | 42.99 | 0.00% .. +60.80% | 1 / 1 / 0 |
+| case_10 / 64 | +3.79% | +0.89% | +2.34% | 2.05 | +0.89% .. +3.79% | 2 / 0 / 0 |
+| case_10 / 150 | -9.27% | +0.0016% | -4.63% | 6.56 | -9.27% .. +0.0016% | 1 / 0 / 1 |
+| case_10 / 200 (in-sample) | +27.24% | +8.47% | +17.86% | 13.27 | +8.47% .. +27.24% | 2 / 0 / 0 |
+
+#### Uplift vs the penalised greedy, deterministic (1 episode, exploration 0)
+
+| benchmark | seed 8 | seed 1 | mean | std (pp) | range | W / T / L |
+|---|---:|---:|---:|---:|---|---|
+| Egg Model | +11.63% | +24.01% | +17.82% | 8.76 | +11.63% .. +24.01% | 2 / 0 / 0 |
+| SPE9 | 0.00% | -25.71% | -12.86% | 18.18 | -25.71% .. 0.00% | 0 / 1 / 1 |
+| SPE10 | -3.08% | 0.00% | -1.54% | 2.18 | -3.08% .. 0.00% | 0 / 1 / 1 |
+| Volve | -0.04% | -0.19% | -0.12% | 0.11 | -0.19% .. -0.04% | 0 / 0 / 2 |
+| NLOG | 0.00% | -0.0002% | -0.0001% | 0.00 | -0.0002% .. 0.00% | 0 / 1 / 1 |
+| Drogon | -0.0001% | 0.00% | -0.0001% | 0.00 | -0.0001% .. 0.00% | 0 / 1 / 1 |
+| Norne | -14.37% | -0.02% | -7.19% | 10.15 | -14.37% .. -0.02% | 0 / 0 / 2 |
+| case_10 / 48 | 0.00% | +60.80% | +30.40% | 42.99 | 0.00% .. +60.80% | 1 / 1 / 0 |
+| case_10 / 64 | +3.79% | +0.89% | +2.34% | 2.05 | +0.89% .. +3.79% | 2 / 0 / 0 |
+| case_10 / 150 | -9.27% | +0.0016% | -4.63% | 6.56 | -9.27% .. +0.0016% | 1 / 0 / 1 |
+| case_10 / 200 (in-sample) | +27.24% | +8.47% | +17.86% | 13.27 | +8.47% .. +27.24% | 2 / 0 / 0 |
+
+#### Uplift vs the NPV-only greedy (primary baseline), best of 10 at exploration 0.15 (matched budget)
+
+| benchmark | seed 8 | seed 1 | mean | std (pp) | range | W / T / L |
+|---|---:|---:|---:|---:|---|---|
+| Egg Model | +5.36% | +10.90% | +8.13% | 3.92 | +5.36% .. +10.90% | 2 / 0 / 0 |
+| SPE9 | +14.00% | 0.00% | +7.00% | 9.90 | 0.00% .. +14.00% | 1 / 1 / 0 |
+| SPE10 | 0.00% | 0.00% | 0.00% | 0.00 | 0.00% .. 0.00% | 0 / 2 / 0 |
+| Volve | -0.02% | -0.18% | -0.10% | 0.11 | -0.18% .. -0.02% | 0 / 0 / 2 |
+| NLOG | 0.00% | -0.0001% | -0.0000% | 0.00 | -0.0001% .. 0.00% | 0 / 1 / 1 |
+| Drogon | -0.0001% | 0.00% | -0.0001% | 0.00 | -0.0001% .. 0.00% | 0 / 1 / 1 |
+| Norne | -13.62% | -0.02% | -6.82% | 9.62 | -13.62% .. -0.02% | 0 / 0 / 2 |
+| case_10 / 48 | -0.32% | +29.37% | +14.53% | 21.00 | -0.32% .. +29.37% | 1 / 0 / 1 |
+| case_10 / 64 | +7.44% | +6.40% | +6.92% | 0.73 | +6.40% .. +7.44% | 2 / 0 / 0 |
+| case_10 / 150 | +0.24% | +0.0015% | +0.12% | 0.17 | +0.0015% .. +0.24% | 2 / 0 / 0 |
+| case_10 / 200 (in-sample) | +20.46% | +8.38% | +14.42% | 8.54 | +8.38% .. +20.46% | 2 / 0 / 0 |
+
+#### Uplift vs the penalised greedy, best of 10 at exploration 0.15 (matched budget)
+
+| benchmark | seed 8 | seed 1 | mean | std (pp) | range | W / T / L |
+|---|---:|---:|---:|---:|---|---|
+| Egg Model | +5.69% | +11.24% | +8.46% | 3.93 | +5.69% .. +11.24% | 2 / 0 / 0 |
+| SPE9 | 0.00% | -12.28% | -6.14% | 8.68 | -12.28% .. 0.00% | 0 / 1 / 1 |
+| SPE10 | 0.00% | 0.00% | 0.00% | 0.00 | 0.00% .. 0.00% | 0 / 2 / 0 |
+| Volve | -0.02% | -0.18% | -0.10% | 0.11 | -0.18% .. -0.02% | 0 / 0 / 2 |
+| NLOG | 0.00% | -0.0001% | -0.0000% | 0.00 | -0.0001% .. 0.00% | 0 / 1 / 1 |
+| Drogon | -0.0001% | 0.00% | -0.0001% | 0.00 | -0.0001% .. 0.00% | 0 / 1 / 1 |
+| Norne | -13.62% | -0.02% | -6.82% | 9.62 | -13.62% .. -0.02% | 0 / 0 / 2 |
+| case_10 / 48 | -0.32% | +29.37% | +14.53% | 21.00 | -0.32% .. +29.37% | 1 / 0 / 1 |
+| case_10 / 64 | +7.44% | +6.40% | +6.92% | 0.73 | +6.40% .. +7.44% | 2 / 0 / 0 |
+| case_10 / 150 | +0.24% | +0.0015% | +0.12% | 0.17 | +0.0015% .. +0.24% | 2 / 0 / 0 |
+| case_10 / 200 (in-sample) | +20.46% | +8.38% | +14.42% | 8.54 | +8.38% .. +20.46% | 2 / 0 / 0 |
+
+
+The 4-seed aggregate and its reading are added in sections 9.4 and 9.5
+once seeds 2 and 3 finish.
